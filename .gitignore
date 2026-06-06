@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+.Python
+
+# Secrets — never commit
+.env
+
+# Data (potentially large)
+data/raw/
+data/processed/
+
+# Qdrant local storage volume
+qdrant_storage/
+qdrant_data/
+
+# Model / embedding cache
+.cache/
+models/
+*.bin
+*.safetensors
+
+# Eval outputs
+evals/results/
+evals/outputs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+CLAUDE.md
