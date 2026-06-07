@@ -58,6 +58,7 @@ def collect_pipeline_outputs(
                     sum(c.get("score", 0.0) for c in chunks) / len(chunks)
                     if chunks else 0.0
                 )
+                conf = out.get("confidence") or {}
                 results.append({
                     "question":         q["question"],
                     "claim_id":         q.get("claim_id", ""),
@@ -65,6 +66,8 @@ def collect_pipeline_outputs(
                     "contexts":         [c["text"] for c in chunks],
                     "chunk_sources":    [c.get("source", "") for c in chunks],
                     "mean_chunk_score": round(mean_score, 4),
+                    "confidence_score": conf.get("score"),
+                    "reranker_score":   conf.get("signals", {}).get("reranker_score"),
                 })
             except Exception as exc:
                 logger.warning("API error on sample %d: %s", i, exc)

@@ -82,6 +82,7 @@ class QueryResponse(BaseModel):
     chunks: list[dict[str, Any]]
     model: str | None = None
     usage: dict[str, Any] | None = None
+    confidence: dict[str, Any] | None = None
 
 
 # ── Ingest helpers ────────────────────────────────────────────────────────────

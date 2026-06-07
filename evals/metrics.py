@@ -212,6 +212,12 @@ def run_custom_metrics(samples: list[dict]) -> dict[str, float]:
         sum(s.get("mean_chunk_score", 0.0) for s in samples) / n
     )
 
+    conf_scores = [s["confidence_score"] for s in samples if s.get("confidence_score") is not None]
+    avg_confidence = sum(conf_scores) / len(conf_scores) if conf_scores else None
+
+    reranker_scores = [s["reranker_score"] for s in samples if s.get("reranker_score") is not None]
+    avg_reranker = sum(reranker_scores) / len(reranker_scores) if reranker_scores else None
+
     # Hallucination check on answered samples only
     if answered:
         client = _gemini_client()
@@ -220,10 +226,15 @@ def run_custom_metrics(samples: list[dict]) -> dict[str, float]:
     else:
         hallucination_rate = 0.0
 
-    return {
+    result = {
         "abstention_rate":    round(abstention_rate, 4),
         "hallucination_rate": round(hallucination_rate, 4),
         "avg_retrieval_score": round(avg_score, 4),
         "n_answered":  len(answered),
         "n_abstained": len(abstained),
     }
+    if avg_confidence is not None:
+        result["avg_confidence"] = round(avg_confidence, 4)
+    if avg_reranker is not None:
+        result["avg_reranker_score"] = round(avg_reranker, 4)
+    return result
