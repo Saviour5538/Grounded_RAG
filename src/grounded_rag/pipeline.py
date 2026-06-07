@@ -1,8 +1,7 @@
 """End-to-end RAG pipeline orchestrator.
 
-Phase 1: dense retrieve → generate (no reranking or confidence scoring yet).
+Phase 3: hybrid retrieve (BM25 + dense, RRF-fused) → generate.
 Later phases slot in without changing the public interface:
-  Phase 3 → hybrid.py replaces dense-only retrieve
   Phase 4 → reranker.py added between retrieve and generate
   Phase 5 → confidence scorer gates generation / triggers abstention
   Phase 6 → citation verifier post-processes the answer
@@ -16,6 +15,8 @@ from config.settings import Settings
 from config.settings import settings as _default_settings
 from grounded_rag.generation.generator import Generator
 from grounded_rag.retrieval.dense import DenseRetriever, EmbeddingModel
+from grounded_rag.retrieval.hybrid import HybridRetriever
+from grounded_rag.retrieval.sparse import BM25Retriever
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ class RAGPipeline:
             provider=cfg.embedding_provider,
             api_key=_embed_key,
         )
-        self.retriever = DenseRetriever(
+        dense = DenseRetriever(
             collection=cfg.qdrant_collection,
             embedding_model=embedder,
             dim=cfg.embedding_dim,
@@ -41,10 +42,13 @@ class RAGPipeline:
             qdrant_mode=cfg.qdrant_mode,
             qdrant_local_path=cfg.qdrant_local_path,
         )
+        sparse = BM25Retriever(qdrant_client=dense.client, collection=cfg.qdrant_collection)
+        self.retriever = HybridRetriever(dense=dense, sparse=sparse)
+
         _api_key_map = {
             "anthropic": cfg.anthropic_api_key,
-            "openai": cfg.openai_api_key,
-            "gemini": cfg.gemini_api_key,
+            "openai":    cfg.openai_api_key,
+            "gemini":    cfg.gemini_api_key,
         }
         self.generator = Generator(
             provider=cfg.llm_provider,
@@ -65,18 +69,18 @@ class RAGPipeline:
         if not chunks:
             logger.info("No chunks retrieved — returning abstention")
             return {
-                "answer": _ABSTAIN,
+                "answer":   _ABSTAIN,
                 "question": question,
-                "chunks": [],
-                "model": None,
-                "usage": None,
+                "chunks":   [],
+                "model":    None,
+                "usage":    None,
             }
 
         result = self.generator.generate(question, chunks)
         return {
-            "answer": result["answer"],
+            "answer":   result["answer"],
             "question": question,
-            "chunks": chunks,
-            "model": result["model"],
-            "usage": result["usage"],
+            "chunks":   chunks,
+            "model":    result["model"],
+            "usage":    result["usage"],
         }
