@@ -34,6 +34,9 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 
+_EXCLUDE_PATTERNS = {"*_queries.jsonl", "*_eval.jsonl"}
+
+
 def build_index(data_dir: Path, batch_size: int = 50, clear: bool = False) -> None:
     if not data_dir.exists():
         logger.error("Data directory not found: %s", data_dir)
@@ -41,7 +44,11 @@ def build_index(data_dir: Path, batch_size: int = 50, clear: bool = False) -> No
         sys.exit(1)
 
     logger.info("Loading documents from %s", data_dir)
-    raw_docs = load_directory(data_dir)
+    raw_docs = [
+        d for d in load_directory(data_dir)
+        if not any(Path(d.source).match(pat) for pat in _EXCLUDE_PATTERNS)
+    ]
+    logger.info("Loaded %d documents (excluded eval/query files)", len(raw_docs))
     enriched = (enrich_document(d) for d in dedup_documents(raw_docs))
 
     _embed_key = settings.gemini_api_key if settings.embedding_provider == "gemini" else settings.openai_api_key
