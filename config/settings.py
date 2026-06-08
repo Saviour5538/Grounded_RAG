@@ -45,7 +45,12 @@ class Settings(BaseSettings):
     # ── Confidence / Abstention ───────────────────────────────────────────────
     confidence_threshold: float = 0.3
 
+    # ── Cache (Phase 7) ───────────────────────────────────────────────────────
+    cache_enabled: bool = True
+    cache_max_size: int = 512
+
     # ── Observability (Phase 7) ───────────────────────────────────────────────
+    trace_log_path: str = "logs/traces.jsonl"
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
     langfuse_host: str = "https://cloud.langfuse.com"

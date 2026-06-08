@@ -83,6 +83,9 @@ class QueryResponse(BaseModel):
     model: str | None = None
     usage: dict[str, Any] | None = None
     confidence: dict[str, Any] | None = None
+    citations: dict[str, Any] | None = None
+    latency_ms: int | None = None
+    cache_hit: bool = False
 
 
 # ── Ingest helpers ────────────────────────────────────────────────────────────
@@ -217,12 +220,15 @@ async def ui():
 @app.get("/health")
 async def health():
     size = 0
+    cache_stats = {}
     if _pipeline is not None:
         try:
             size = _pipeline.retriever.collection_size()
         except Exception:
             pass
-    return {"status": "ok", "indexed_chunks": size}
+        if _pipeline.cache:
+            cache_stats = _pipeline.cache.stats()
+    return {"status": "ok", "indexed_chunks": size, "cache": cache_stats}
 
 
 @app.post("/query", response_model=QueryResponse)
