@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     # ── Confidence / Abstention ───────────────────────────────────────────────
     confidence_threshold: float = 0.3
 
+    # ── Agentic re-retrieval (Phase 8) ───────────────────────────────────────
+    agentic_retry_enabled: bool = True
+    agentic_max_retries: int = 2        # reformulation attempts before final abstention
+
     # ── Cache (Phase 7) ───────────────────────────────────────────────────────
     cache_enabled: bool = True
     cache_max_size: int = 512

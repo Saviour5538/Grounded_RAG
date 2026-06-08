@@ -86,6 +86,7 @@ class QueryResponse(BaseModel):
     citations: dict[str, Any] | None = None
     latency_ms: int | None = None
     cache_hit: bool = False
+    reformulations: list[str] = []
 
 
 # ── Ingest helpers ────────────────────────────────────────────────────────────
