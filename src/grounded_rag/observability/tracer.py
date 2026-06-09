@@ -52,9 +52,9 @@ class Tracer:
                 )
                 logger.info("Langfuse tracing enabled → %s", langfuse_host)
             except ImportError:
-                logger.warning(
-                    "langfuse not installed — install it with: pip install langfuse"
-                )
+                logger.warning("langfuse not installed — run: pip install langfuse")
+            except Exception as exc:
+                logger.warning("Langfuse init failed: %s", exc)
 
     def log(self, trace: dict[str, Any]) -> None:
         """Append one trace record to the JSONL file and optionally Langfuse."""
@@ -65,11 +65,21 @@ class Tracer:
 
         if self._lf:
             try:
-                self._lf.generation(
+                abstained = trace.get("abstained", False)
+                meta = {k: v for k, v in trace.items() if k not in {"query", "answer", "ts"}}
+                t = self._lf.trace(
                     name="rag_query",
+                    input={"question": trace.get("query")},
+                    output=trace.get("answer"),
+                    metadata=meta,
+                    tags=["abstained"] if abstained else [],
+                )
+                t.generation(
+                    name="llm_answer",
                     input=trace.get("query"),
                     output=trace.get("answer"),
-                    metadata={k: v for k, v in trace.items() if k not in {"query", "answer"}},
+                    metadata=meta,
                 )
+                self._lf.flush()
             except Exception as exc:
                 logger.warning("Langfuse trace failed: %s", exc)
