@@ -23,6 +23,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+_MAX_HISTORY_TURNS = 5   # how many prior Q&A turns to keep per session
+
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
@@ -34,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from config.settings import settings
 from grounded_rag.ingest.chunker import chunk_document
 from grounded_rag.ingest.dedup import dedup_documents
-from grounded_rag.ingest.loader import Document, load_jsonl
+from grounded_rag.ingest.loader import Document, _normalize, load_jsonl, load_pdf
 from grounded_rag.ingest.metadata import enrich_document
 from grounded_rag.pipeline import RAGPipeline
 from grounded_rag.retrieval.dense import DenseRetriever, EmbeddingModel
@@ -47,6 +49,10 @@ _pipeline: RAGPipeline | None = None
 # ── In-memory job registry ────────────────────────────────────────────────────
 # job_id → {status, progress, error, started_at, finished_at}
 _jobs: dict[str, dict[str, Any]] = {}
+
+# ── Session memory store ──────────────────────────────────────────────────────
+# session_id → [{"question": str, "answer": str}, ...]  (last N turns)
+_sessions: dict[str, list[dict[str, Any]]] = {}
 
 _UI_HTML = Path(__file__).parent / "static" / "index.html"
 
@@ -74,6 +80,7 @@ app = FastAPI(
 class QueryRequest(BaseModel):
     question: str
     top_k: int | None = None
+    session_id: str | None = None   # omit for stateless; provide to use session memory
 
 
 class QueryResponse(BaseModel):
@@ -87,14 +94,32 @@ class QueryResponse(BaseModel):
     latency_ms: int | None = None
     cache_hit: bool = False
     reformulations: list[str] = []
+    session_id: str | None = None
+    history_turns: int = 0   # how many prior turns informed this answer
 
 
 # ── Ingest helpers ────────────────────────────────────────────────────────────
 
 def _load_upload_bytes(file_bytes: bytes, filename: str):
-    """Parse uploaded bytes as JSONL or a JSON array. Yields Document objects."""
-    text = file_bytes.decode("utf-8")
+    """Parse uploaded bytes into Document objects.
+
+    Dispatches by extension: .pdf → load_pdf, .json → JSON array,
+    .jsonl/.csv → temp-file loaders.
+    """
     suffix = Path(filename).suffix.lower()
+
+    # PDF: write raw bytes to a temp file and use load_pdf
+    if suffix == ".pdf":
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(file_bytes)
+            tmp_path = Path(tmp.name)
+        try:
+            yield from load_pdf(tmp_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+        return
+
+    text = file_bytes.decode("utf-8")
 
     # Try JSON array first if .json extension or starts with '['
     if suffix == ".json" or text.lstrip().startswith("["):
@@ -103,7 +128,7 @@ def _load_upload_bytes(file_bytes: bytes, filename: str):
             if isinstance(items, list):
                 _TEXT_FIELDS = ("text", "content", "abstract", "body", "passage")
                 for obj in items:
-                    body = next((obj[k] for k in _TEXT_FIELDS if obj.get(k)), "")
+                    body = _normalize(next((obj[k] for k in _TEXT_FIELDS if obj.get(k)), ""))
                     if not body:
                         continue
                     raw_id = obj.get("id") or obj.get("_id")
@@ -114,8 +139,8 @@ def _load_upload_bytes(file_bytes: bytes, filename: str):
         except json.JSONDecodeError:
             pass  # fall through to JSONL
 
-    # JSONL: write to a temp file and use existing loader
-    with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False, mode="w", encoding="utf-8") as tmp:
+    # JSONL / CSV: write to a temp file and use existing loaders
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False, mode="w", encoding="utf-8") as tmp:
         tmp.write(text)
         tmp_path = Path(tmp.name)
     try:
@@ -217,6 +242,11 @@ def _run_ingest_job(
         logger.info("[job %s] Done — %d docs, %d chunks indexed",
                     job_id, docs_done, job["progress"]["chunks_indexed"])
 
+        # Invalidate the pipeline's BM25 index so the next query rebuilds it
+        # from the updated Pinecone corpus (dense retriever is always live).
+        if _pipeline is not None:
+            _pipeline.retriever.sparse.invalidate()
+
     except Exception as exc:
         logger.exception("[job %s] Failed: %s", job_id, exc)
         job["status"] = "error"
@@ -251,8 +281,33 @@ async def health():
 async def query(request: QueryRequest):
     if _pipeline is None:
         raise HTTPException(status_code=503, detail="Pipeline not initialised")
-    result = _pipeline.query(request.question)
-    return QueryResponse(**result)
+
+    session_id = request.session_id
+    history: list[dict[str, Any]] = []
+
+    if session_id:
+        history = list(_sessions.get(session_id, []))   # copy so pipeline can't mutate store
+
+    result = _pipeline.query(request.question, history=history or None)
+
+    # Persist this turn into session memory
+    if session_id:
+        if session_id not in _sessions:
+            _sessions[session_id] = []
+        _sessions[session_id].append({
+            "question": request.question,
+            "answer":   result["answer"],
+        })
+        _sessions[session_id] = _sessions[session_id][-_MAX_HISTORY_TURNS:]
+
+    return QueryResponse(**result, session_id=session_id, history_turns=len(history))
+
+
+@app.delete("/session/{session_id}", include_in_schema=False)
+async def clear_session(session_id: str):
+    """Clear a session's conversation history (called by 'New conversation' button)."""
+    _sessions.pop(session_id, None)
+    return {"cleared": True, "session_id": session_id}
 
 
 @app.post("/ingest")
@@ -266,10 +321,10 @@ async def ingest(
         raise HTTPException(status_code=400, detail="No file provided")
 
     suffix = Path(file.filename).suffix.lower()
-    if suffix not in {".json", ".jsonl", ".csv"}:
+    if suffix not in {".json", ".jsonl", ".csv", ".pdf"}:
         raise HTTPException(
             status_code=400,
-            detail="Unsupported file type. Upload a .json, .jsonl, or .csv file.",
+            detail="Unsupported file type. Upload a .json, .jsonl, .csv, or .pdf file.",
         )
 
     file_bytes = await file.read()

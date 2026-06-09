@@ -57,7 +57,7 @@ def download_scifact(out_dir: Path) -> None:
 
     # ── Queries (for Phase 2 eval) ─────────────────────────────────────────────
     logger.info("Downloading SciFact queries...")
-    queries_ds = load_dataset("BeIR/scifact", "queries", split="queries", )
+    queries_ds = load_dataset("BeIR/scifact", "queries", split="queries")
     queries_path = out_dir / "scifact_queries.jsonl"
     written = 0
     with queries_path.open("w", encoding="utf-8") as f:
@@ -66,6 +66,28 @@ def download_scifact(out_dir: Path) -> None:
             f.write(json.dumps(record) + "\n")
             written += 1
     logger.info("Wrote %d queries → %s", written, queries_path)
+
+    # ── Qrels (claim → has evidence in corpus) ────────────────────────────────
+    # In BeIR SciFact, any claim_id present in qrels has supporting/refuting
+    # evidence. Claims absent from qrels are "NOT_ENOUGH_INFO" — the pipeline
+    # should abstain on those. We store the set as a JSONL for the eval harness.
+    logger.info("Downloading SciFact qrels...")
+    try:
+        qrels_ds = load_dataset("BeIR/scifact", "qrels")
+        claims_with_evidence: set[str] = set()
+        for split in qrels_ds:
+            for item in qrels_ds[split]:
+                if item.get("score", 0) >= 1:
+                    claims_with_evidence.add(str(item["query-id"]))
+        qrels_path = out_dir / "scifact_qrels.jsonl"
+        with qrels_path.open("w", encoding="utf-8") as f:
+            for claim_id in sorted(claims_with_evidence):
+                f.write(json.dumps({"claim_id": claim_id, "has_evidence": True}) + "\n")
+        logger.info(
+            "Wrote %d claims-with-evidence → %s", len(claims_with_evidence), qrels_path
+        )
+    except Exception as e:
+        logger.warning("Could not download qrels (%s) — abstention-correctness eval will be skipped", e)
 
 
 def main() -> None:

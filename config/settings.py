@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 1024
 
     # ── Retrieval ────────────────────────────────────────────────────────────
-    retrieval_top_k: int = 10     # candidates from ANN search
+    retrieval_top_k: int = 50     # candidates from ANN search (50→reranker→top-5)
     reranker_top_n: int = 5       # kept after cross-encoder reranking (Phase 4)
 
     # ── Chunking ─────────────────────────────────────────────────────────────

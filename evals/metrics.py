@@ -198,6 +198,58 @@ def run_ragas(samples: list[dict]) -> dict[str, float]:
     }
 
 
+def abstention_correctness(samples: list[dict]) -> dict[str, float] | None:
+    """Measure how correctly the pipeline decides to answer vs. abstain.
+
+    Uses SciFact qrels ground truth:
+      has_evidence=True  → pipeline SHOULD answer  (abstaining = false negative)
+      has_evidence=False → pipeline SHOULD abstain (answering  = false positive)
+
+    Returns None if has_evidence labels are not available (qrels not downloaded).
+
+    Metrics returned
+    ----------------
+    abstention_precision : of all abstentions, fraction that were correct (NEI queries)
+    abstention_recall    : of all NEI queries, fraction the pipeline correctly abstained
+    abstention_f1        : harmonic mean of precision and recall
+    false_negative_rate  : fraction of answerable queries where pipeline wrongly abstained
+    """
+    labeled = [s for s in samples if s.get("has_evidence") is not None]
+    if not labeled:
+        return None
+
+    should_answer  = [s for s in labeled if s["has_evidence"]]
+    should_abstain = [s for s in labeled if not s["has_evidence"]]
+
+    if not should_abstain:
+        return None  # no NEI samples in this eval slice
+
+    _A = "Insufficient evidence"
+
+    # True positives for abstention: NEI queries where pipeline abstained
+    tp_abstain = sum(1 for s in should_abstain if s["answer"].startswith(_A))
+    # False positives: answerable queries where pipeline wrongly abstained
+    fp_abstain = sum(1 for s in should_answer  if s["answer"].startswith(_A))
+    # False negatives: NEI queries where pipeline answered instead of abstaining
+    fn_abstain = len(should_abstain) - tp_abstain
+
+    precision = tp_abstain / (tp_abstain + fp_abstain) if (tp_abstain + fp_abstain) > 0 else 0.0
+    recall    = tp_abstain / len(should_abstain)
+    f1        = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
+    fnr       = fp_abstain / len(should_answer) if should_answer else 0.0
+
+    return {
+        "abstention_precision":    round(precision, 4),
+        "abstention_recall":       round(recall,    4),
+        "abstention_f1":           round(f1,        4),
+        "false_negative_rate":     round(fnr,        4),
+        "n_should_abstain":        len(should_abstain),
+        "n_should_answer":         len(should_answer),
+        "n_correctly_abstained":   tp_abstain,
+        "n_wrongly_abstained":     fp_abstain,
+    }
+
+
 def run_custom_metrics(samples: list[dict]) -> dict[str, float]:
     """Compute abstention_rate, hallucination_rate, and avg_retrieval_score."""
     n = len(samples)

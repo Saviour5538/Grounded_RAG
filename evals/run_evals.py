@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from config.settings import settings
 from evals.datasets.scifact_qa import load_eval_samples
-from evals.metrics import run_custom_metrics, run_ragas
+from evals.metrics import abstention_correctness, run_custom_metrics, run_ragas
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -86,24 +86,51 @@ def collect_pipeline_outputs(
     return results
 
 
-def print_summary(ragas_scores: dict, custom_scores: dict) -> None:
-    print("\n" + "=" * 52)
-    print("  PHASE 2 BASELINE — GROUNDED RAG")
-    print("=" * 52)
-    print("\n  RAGAS Metrics  (higher = better)")
-    print("  " + "-" * 40)
-    for k, v in ragas_scores.items():
-        bar = "█" * int(v * 20)
-        print(f"  {k:<36} {v:.3f}  {bar}")
+def print_summary(
+    ragas_scores: dict,
+    custom_scores: dict,
+    abstention_scores: dict | None = None,
+) -> None:
+    print("\n" + "=" * 56)
+    print("  GROUNDED RAG — EVAL REPORT")
+    print("=" * 56)
 
-    print("\n  Custom Metrics")
-    print("  " + "-" * 40)
-    for k, v in custom_scores.items():
-        if isinstance(v, float):
-            print(f"  {k:<36} {v:.3f}")
-        else:
-            print(f"  {k:<36} {v}")
-    print("=" * 52 + "\n")
+    if ragas_scores:
+        print("\n  RAGAS Metrics  (higher = better)")
+        print("  " + "-" * 44)
+        for k, v in ragas_scores.items():
+            bar = "█" * int(v * 20)
+            print(f"  {k:<36} {v:.3f}  {bar}")
+
+    if custom_scores:
+        print("\n  Custom Metrics")
+        print("  " + "-" * 44)
+        for k, v in custom_scores.items():
+            if isinstance(v, float):
+                print(f"  {k:<36} {v:.3f}")
+            else:
+                print(f"  {k:<36} {v}")
+
+    if abstention_scores:
+        print("\n  Abstention Correctness  (crown jewel)")
+        print("  " + "-" * 44)
+        key_order = [
+            "abstention_precision", "abstention_recall", "abstention_f1",
+            "false_negative_rate",
+            "n_should_abstain", "n_correctly_abstained", "n_wrongly_abstained",
+            "n_should_answer",
+        ]
+        for k in key_order:
+            v = abstention_scores.get(k)
+            if v is None:
+                continue
+            if isinstance(v, float):
+                bar = "█" * int(v * 20) if k != "false_negative_rate" else ""
+                print(f"  {k:<36} {v:.3f}  {bar}")
+            else:
+                print(f"  {k:<36} {v}")
+
+    print("=" * 56 + "\n")
 
 
 def main() -> None:
@@ -147,6 +174,14 @@ def main() -> None:
     logger.info("Running custom metrics…")
     custom_scores = run_custom_metrics(samples)
 
+    logger.info("Running abstention-correctness metrics…")
+    abstention_scores = abstention_correctness(samples)
+    if abstention_scores is None:
+        logger.warning(
+            "Abstention-correctness skipped — qrels not found. "
+            "Re-run `python scripts/ingest_corpus.py` to download them."
+        )
+
     # ── 5. Save results ───────────────────────────────────────────────────────
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -161,9 +196,10 @@ def main() -> None:
             "retrieval_top_k": settings.retrieval_top_k,
             "chunk_size":      settings.chunk_size,
         },
-        "ragas":  ragas_scores,
-        "custom": custom_scores,
-        "samples": samples,   # full trace for debugging
+        "ragas":       ragas_scores,
+        "custom":      custom_scores,
+        "abstention":  abstention_scores or {},
+        "samples":     samples,
     }
 
     with out_path.open("w", encoding="utf-8") as f:
@@ -171,7 +207,7 @@ def main() -> None:
     logger.info("Results saved to %s", out_path)
 
     # ── 6. Print summary ──────────────────────────────────────────────────────
-    print_summary(ragas_scores, custom_scores)
+    print_summary(ragas_scores, custom_scores, abstention_scores)
 
 
 if __name__ == "__main__":

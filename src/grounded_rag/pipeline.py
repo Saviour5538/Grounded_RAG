@@ -126,12 +126,23 @@ class RAGPipeline:
         self._llm_model = cfg.llm_model
         self._retrieve_k = max(cfg.retrieval_top_k, cfg.reranker_top_n * 4)
 
-    def query(self, question: str) -> dict[str, Any]:
-        """Run the full pipeline: cache → retrieve → rerank → confidence → generate → verify."""
+    def query(
+        self,
+        question: str,
+        history: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Run the full pipeline: cache → retrieve → rerank → confidence → generate → verify.
+
+        history: list of {"question": str, "answer": str} from earlier turns in the
+                 same session. Injected into the generation prompt so the LLM can
+                 resolve references like "it" or "they" from prior context.
+                 Cache is bypassed when history is present (session-specific answers
+                 must not be served to other sessions).
+        """
         t0 = time.perf_counter()
 
-        # ── 0. Cache check ─────────────────────────────────────────────────────
-        if self.cache:
+        # ── 0. Cache check (skipped for session queries) ───────────────────────
+        if self.cache and not history:
             cached = self.cache.get(question)
             if cached:
                 cached["cache_hit"] = True
@@ -181,10 +192,10 @@ class RAGPipeline:
                 "Abstaining after %d attempt(s) — final confidence %.3f",
                 len(reformulations) + 1, confidence["score"],
             )
-            return self._abstain(question, confidence, t0, reformulations)
+            return self._abstain(question, confidence, t0, reformulations, history=history)
 
         # ── 4. Generate ────────────────────────────────────────────────────────
-        result = self.generator.generate(active_query, chunks)
+        result = self.generator.generate(active_query, chunks, history=history)
 
         # ── 5. Citation verification (Phase 6) ────────────────────────────────
         citations = verify_citations(
@@ -208,8 +219,8 @@ class RAGPipeline:
             "reformulations":  reformulations,
         }
 
-        # ── 6. Cache write ─────────────────────────────────────────────────────
-        if self.cache:
+        # ── 6. Cache write (skipped for session queries) ──────────────────────
+        if self.cache and not history:
             self.cache.set(question, response)
 
         # ── 7. Trace ───────────────────────────────────────────────────────────
@@ -236,6 +247,7 @@ class RAGPipeline:
         confidence: dict,
         t0: float | None = None,
         reformulations: list[str] | None = None,
+        history: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         latency_ms = round((time.perf_counter() - t0) * 1000) if t0 is not None else 0
         response: dict[str, Any] = {
@@ -250,7 +262,7 @@ class RAGPipeline:
             "cache_hit":      False,
             "reformulations": reformulations or [],
         }
-        if self.cache:
+        if self.cache and not history:
             self.cache.set(question, response)
         self.tracer.log({
             "query":          question,

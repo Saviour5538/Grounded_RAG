@@ -83,6 +83,16 @@ class BM25Retriever:
             "BM25 index ready: %d chunks in %.1fs", len(self._corpus), time.time() - t0
         )
 
+    def invalidate(self) -> None:
+        """Drop the cached BM25 index so it rebuilds on the next retrieve() call.
+
+        Call this after new chunks are indexed so the BM25 corpus stays in sync
+        with the vector store.
+        """
+        self._corpus = []
+        self._bm25 = None
+        logger.info("BM25 index invalidated — will rebuild on next query")
+
     def retrieve(self, query: str, top_k: int = 50) -> list[dict[str, Any]]:
         """Return top_k chunks ranked by BM25 score for the query."""
         if self._bm25 is None:

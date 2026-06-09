@@ -34,6 +34,17 @@ def _build_context_block(chunks: list[dict[str, Any]]) -> str:
     return "\n\n---\n\n".join(lines)
 
 
+def _build_history_block(history: list[dict[str, Any]]) -> str:
+    lines: list[str] = []
+    for turn in history:
+        lines.append(f"Q: {turn['question']}")
+        answer = turn["answer"]
+        if len(answer) > 400:
+            answer = answer[:400] + "…"
+        lines.append(f"A: {answer}")
+    return "\n".join(lines)
+
+
 class Generator:
     """Thin wrapper over Anthropic, OpenAI, or Gemini chat completions.
 
@@ -70,13 +81,26 @@ class Generator:
             raise ValueError(f"Unknown LLM provider: {self.provider!r}")
         return self._client
 
-    def generate(self, query: str, chunks: list[dict[str, Any]]) -> dict[str, Any]:
+    def generate(
+        self,
+        query: str,
+        chunks: list[dict[str, Any]],
+        history: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """Generate an answer grounded in `chunks`.
 
         Returns a dict with keys: answer, model, usage, num_context_chunks.
         """
         context = _build_context_block(chunks)
-        user_message = f"Context passages:\n\n{context}\n\nQuestion: {query}"
+        if history:
+            history_block = _build_history_block(history)
+            user_message = (
+                f"Previous conversation:\n{history_block}\n\n"
+                f"Context passages:\n\n{context}\n\n"
+                f"Question: {query}"
+            )
+        else:
+            user_message = f"Context passages:\n\n{context}\n\nQuestion: {query}"
         client = self._get_client()
 
         if self.provider == "anthropic":
