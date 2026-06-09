@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from config.settings import settings
 from grounded_rag.ingest.chunker import chunk_document
 from grounded_rag.ingest.dedup import dedup_documents
-from grounded_rag.ingest.loader import Document, _normalize, load_jsonl, load_pdf
+from grounded_rag.ingest.loader import Document, _normalize, load_csv, load_jsonl, load_pdf
 from grounded_rag.ingest.metadata import enrich_document
 from grounded_rag.pipeline import RAGPipeline
 from grounded_rag.retrieval.dense import DenseRetriever, EmbeddingModel
@@ -139,12 +139,15 @@ def _load_upload_bytes(file_bytes: bytes, filename: str):
         except json.JSONDecodeError:
             pass  # fall through to JSONL
 
-    # JSONL / CSV: write to a temp file and use existing loaders
+    # JSONL / CSV: write to a temp file and dispatch to the correct loader
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False, mode="w", encoding="utf-8") as tmp:
         tmp.write(text)
         tmp_path = Path(tmp.name)
     try:
-        yield from load_jsonl(tmp_path)
+        if suffix == ".csv":
+            yield from load_csv(tmp_path)
+        else:
+            yield from load_jsonl(tmp_path)
     finally:
         tmp_path.unlink(missing_ok=True)
 
