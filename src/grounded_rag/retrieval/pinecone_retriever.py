@@ -135,20 +135,36 @@ class PineconeRetriever:
         ]
 
     def scroll_all(self) -> list[dict[str, Any]]:
-        """Fetch every chunk from Pinecone — used by BM25Retriever to build its index."""
+        """Fetch every chunk from Pinecone — used by BM25Retriever to build its index.
+
+        Pinecone SDK v9+ list() yields ListResponse objects with a .vectors list of
+        ListItem(id=...) — extract the string IDs before passing to fetch().
+        """
         if self._index is None:
             self.ensure_collection()
 
         logger.info("Scrolling all vectors from Pinecone index '%s' for BM25...", self.index_name)
         all_chunks: list[dict[str, Any]] = []
 
-        for id_batch in self._index.list():
-            fetch_result = self._index.fetch(ids=list(id_batch))
+        for response in self._index.list():
+            # SDK v9+: response is a ListResponse with .vectors=[ListItem(id=...), ...]
+            # SDK v3-v8: response is a plain list[str]
+            if hasattr(response, "vectors"):
+                ids = [item.id for item in response.vectors]
+            else:
+                ids = list(response)
+
+            if not ids:
+                continue
+
+            fetch_result = self._index.fetch(ids=ids)
             for _vid, vec in fetch_result.vectors.items():
-                m = vec.metadata
+                m = vec.metadata or {}
+                if not m.get("text"):
+                    continue
                 all_chunks.append({
-                    "chunk_id":    m["chunk_id"],
-                    "doc_id":      m["doc_id"],
+                    "chunk_id":    m.get("chunk_id", _vid),
+                    "doc_id":      m.get("doc_id", ""),
                     "text":        m["text"],
                     "source":      m.get("source", ""),
                     "score":       0.0,

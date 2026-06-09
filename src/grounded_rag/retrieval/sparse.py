@@ -77,6 +77,10 @@ class BM25Retriever:
                 if offset is None:
                     break
 
+        if not self._corpus:
+            logger.warning("BM25: corpus is empty — sparse retrieval will be skipped until index is populated")
+            return
+
         tokenized = [_tokenize(c["text"]) for c in self._corpus]
         self._bm25 = BM25Okapi(tokenized)
         logger.info(
@@ -97,6 +101,8 @@ class BM25Retriever:
         """Return top_k chunks ranked by BM25 score for the query."""
         if self._bm25 is None:
             self._build_index()
+        if self._bm25 is None:
+            return []  # corpus empty — dense-only fallback
 
         import numpy as np
 
