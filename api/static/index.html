@@ -290,11 +290,6 @@
     .answer-panel { display: none; margin-top: 20px; }
     .answer-panel.visible { display: block; }
 
-    /* Meta row: confidence + latency + cache */
-    .meta-row {
-      display: flex; flex-wrap: wrap; gap: 10px;
-      margin-bottom: 14px; align-items: center;
-    }
     .meta-chip {
       display: inline-flex; align-items: center; gap: 5px;
       padding: 4px 10px; border-radius: 20px;
@@ -307,36 +302,70 @@
       width: 6px; height: 6px; border-radius: 50%;
     }
 
-    /* Confidence bar */
-    .confidence-block {
+    /* Pipeline Metrics section */
+    .metrics-section {
       background: var(--surface2);
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
-      padding: 12px 14px;
+      padding: 14px 16px;
       margin-bottom: 14px;
     }
-    .confidence-header {
-      display: flex; justify-content: space-between; align-items: center;
-      margin-bottom: 8px;
+    .metrics-section-title {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.08em; color: var(--text3);
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 10px;
     }
-    .confidence-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text3); }
-    .confidence-score { font-size: 18px; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
-    .confidence-score.high   { color: var(--green); }
-    .confidence-score.medium { color: var(--yellow); }
-    .confidence-score.low    { color: var(--red); }
-    .conf-bar { height: 6px; background: var(--surface3); border-radius: 99px; overflow: hidden; }
-    .conf-fill {
-      height: 100%; border-radius: 99px;
-      transition: width 0.8s cubic-bezier(0.4,0,0.2,1);
+    .metrics-group-label {
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.06em; color: var(--text3);
+      margin: 12px 0 6px; padding-bottom: 5px;
+      border-bottom: 1px solid var(--border2);
     }
-    .conf-fill.high   { background: linear-gradient(90deg, var(--green), #34d399); }
-    .conf-fill.medium { background: linear-gradient(90deg, var(--yellow), #fcd34d); }
-    .conf-fill.low    { background: linear-gradient(90deg, var(--red), #fb7185); }
-    .conf-signals {
-      display: flex; gap: 14px; margin-top: 8px;
-      font-size: 11px; color: var(--text3);
+    .metrics-group-label:first-child { margin-top: 0; }
+    .metric-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 5px 0;
     }
-    .conf-signals span b { color: var(--text2); font-family: 'JetBrains Mono', monospace; }
+    .metric-name {
+      font-size: 12px; color: var(--text2); min-width: 148px; flex-shrink: 0;
+    }
+    .metric-val {
+      font-size: 13px; font-weight: 700;
+      font-family: 'JetBrains Mono', monospace;
+      min-width: 56px; flex-shrink: 0;
+    }
+    .metric-val.high   { color: var(--green); }
+    .metric-val.medium { color: var(--yellow); }
+    .metric-val.low    { color: var(--red); }
+    .metric-val.neutral { color: var(--text); }
+    .metric-bar-wrap {
+      flex: 1; height: 4px; background: var(--surface3);
+      border-radius: 99px; overflow: hidden;
+    }
+    .metric-bar-fill {
+      height: 100%; border-radius: 99px; width: 0%;
+      transition: width 0.7s cubic-bezier(0.4,0,0.2,1);
+    }
+    .metric-bar-fill.high   { background: linear-gradient(90deg, var(--green), #34d399); }
+    .metric-bar-fill.medium { background: linear-gradient(90deg, var(--yellow), #fcd34d); }
+    .metric-bar-fill.low    { background: linear-gradient(90deg, var(--red), #fb7185); }
+    .metric-tag {
+      font-size: 10px; font-weight: 600; padding: 2px 7px;
+      border-radius: 4px; flex-shrink: 0;
+    }
+    .metric-tag.high   { background: var(--green-dim);  color: var(--green); }
+    .metric-tag.medium { background: var(--yellow-dim); color: var(--yellow); }
+    .metric-tag.low    { background: var(--red-dim);    color: var(--red); }
+    .metrics-perf-row {
+      display: flex; flex-wrap: wrap; gap: 14px;
+      margin-top: 10px; padding-top: 10px;
+      border-top: 1px solid var(--border2);
+      font-size: 12px; color: var(--text2);
+    }
+    .metrics-perf-row b {
+      color: var(--text); font-family: 'JetBrains Mono', monospace;
+    }
 
     /* Answer text */
     .answer-label {
@@ -682,20 +711,16 @@
       <!-- Answer panel -->
       <div class="answer-panel" id="answer-panel">
 
-        <!-- Confidence -->
-        <div class="confidence-block" id="conf-block" style="display:none">
-          <div class="confidence-header">
-            <span class="confidence-label">Retrieval Confidence</span>
-            <span class="confidence-score" id="conf-score">0.00</span>
+        <!-- Pipeline Metrics -->
+        <div class="metrics-section" id="metrics-block" style="display:none">
+          <div class="metrics-section-title">
+            Pipeline Metrics
+            <span id="cache-badge-metrics" style="display:none" class="meta-chip">
+              <span class="chip-dot" style="background:var(--blue)"></span> Cache Hit
+            </span>
           </div>
-          <div class="conf-bar">
-            <div class="conf-fill" id="conf-fill" style="width:0%"></div>
-          </div>
-          <div class="conf-signals" id="conf-signals"></div>
+          <div id="metrics-body"></div>
         </div>
-
-        <!-- Meta: latency + model + reformulations count -->
-        <div class="meta-row" id="meta-row"></div>
 
         <!-- Reformulations warning -->
         <div class="reformulation-block" id="reform-block" style="display:none">
@@ -976,64 +1001,113 @@ function renderAnswer(d, question) {
     hb.style.display = 'inline-flex';
   }
 
-  // Cache badge
+  // Cache badge (card header)
   if (d.cache_hit) document.getElementById('cache-badge').style.display = 'inline-flex';
 
-  // Confidence block
-  const confBlock = document.getElementById('conf-block');
-  if (d.confidence && d.confidence.score != null) {
-    confBlock.style.display = 'block';
-    const score = d.confidence.score;
-    const pct = Math.round(score * 100);
-    const tier = score >= 0.6 ? 'high' : score >= 0.3 ? 'medium' : 'low';
-    document.getElementById('conf-score').textContent = score.toFixed(3);
-    document.getElementById('conf-score').className = 'confidence-score ' + tier;
-    const fill = document.getElementById('conf-fill');
-    fill.className = 'conf-fill ' + tier;
-    setTimeout(() => fill.style.width = pct + '%', 50);
-    const sig = d.confidence.signals || {};
-    document.getElementById('conf-signals').innerHTML =
-      `<span>Reranker: <b>${sig.reranker_score != null ? sig.reranker_score.toFixed(3) : '—'}</b></span>
-       <span>RRF: <b>${sig.rrf_signal != null ? sig.rrf_signal.toFixed(3) : '—'}</b></span>
-       <span>Token overlap: <b>${sig.token_overlap != null ? sig.token_overlap.toFixed(3) : '—'}</b></span>`;
-  } else {
-    confBlock.style.display = 'none';
-  }
+  // Pipeline Metrics section
+  const metricsBlock = document.getElementById('metrics-block');
+  const metricsBody  = document.getElementById('metrics-body');
+  metricsBody.innerHTML = '';
 
-  // Meta row
-  const metaRow = document.getElementById('meta-row');
-  metaRow.innerHTML = '';
-  if (d.latency_ms != null) {
-    const c = mkChip('⚡ ' + d.latency_ms + ' ms', '');
-    metaRow.appendChild(c);
-  }
-  if (d.model) {
-    const c = mkChip('🤖 ' + d.model.replace('models/',''), '');
-    metaRow.appendChild(c);
-  }
-  if (d.usage) {
-    const c = mkChip(`↑${d.usage.input_tokens||0} ↓${d.usage.output_tokens||0} tokens`, '');
-    metaRow.appendChild(c);
-  }
-  if (d.faithfulness != null) {
-    const pct = Math.round(d.faithfulness * 100);
-    const color = d.faithfulness >= 0.7 ? 'var(--green)' : d.faithfulness >= 0.4 ? 'var(--yellow)' : 'var(--red)';
-    const c = mkChip('Faithfulness: ' + pct + '%');
-    const dot = document.createElement('span');
-    dot.className = 'chip-dot';
-    dot.style.background = color;
-    c.prepend(dot);
-    metaRow.appendChild(c);
-  }
-  if (d.answer_relevancy != null) {
-    const pct = Math.round(d.answer_relevancy * 100);
-    const color = d.answer_relevancy >= 0.7 ? 'var(--green)' : d.answer_relevancy >= 0.4 ? 'var(--yellow)' : 'var(--red)';
-    const c = mkChip('Relevancy: ' + pct + '%');
-    const dot = document.createElement('span');
-    dot.className = 'chip-dot';
-    dot.style.background = color;
-    c.prepend(dot);
-    metaRow.appendChild(c);
+  const conf = d.confidence || {};
+  const sig  = conf.signals || {};
+  const hasMetrics = conf.score != null || d.faithfulness != null || d.answer_relevancy != null
+                     || d.latency_ms != null || d.model;
+
+  if (hasMetrics) {
+    metricsBlock.style.display = 'block';
+    let html = '';
+
+    // ── Quality group ──────────────────────────────────────────────────────────
+    html += '<div class="metrics-group-label">Quality</div>';
+
+    if (conf.score != null) {
+      const pct  = Math.round(conf.score * 100);
+      const tier = conf.score >= 0.6 ? 'high' : conf.score >= 0.3 ? 'medium' : 'low';
+      const lbl  = tier.charAt(0).toUpperCase() + tier.slice(1);
+      html += `<div class="metric-row">
+        <span class="metric-name">Confidence Score</span>
+        <span class="metric-val ${tier}">${conf.score.toFixed(3)}</span>
+        <div class="metric-bar-wrap"><div class="metric-bar-fill ${tier}" data-w="${pct}%"></div></div>
+        <span class="metric-tag ${tier}">${lbl}</span>
+      </div>`;
+    }
+
+    if (d.faithfulness != null) {
+      const pct  = Math.round(d.faithfulness * 100);
+      const tier = d.faithfulness >= 0.7 ? 'high' : d.faithfulness >= 0.4 ? 'medium' : 'low';
+      const lbl  = tier.charAt(0).toUpperCase() + tier.slice(1);
+      html += `<div class="metric-row">
+        <span class="metric-name">Faithfulness</span>
+        <span class="metric-val ${tier}">${pct}%</span>
+        <div class="metric-bar-wrap"><div class="metric-bar-fill ${tier}" data-w="${pct}%"></div></div>
+        <span class="metric-tag ${tier}">${lbl}</span>
+      </div>`;
+    }
+
+    if (d.answer_relevancy != null) {
+      const pct  = Math.round(d.answer_relevancy * 100);
+      const tier = d.answer_relevancy >= 0.7 ? 'high' : d.answer_relevancy >= 0.4 ? 'medium' : 'low';
+      const lbl  = tier.charAt(0).toUpperCase() + tier.slice(1);
+      html += `<div class="metric-row">
+        <span class="metric-name">Answer Relevancy</span>
+        <span class="metric-val ${tier}">${pct}%</span>
+        <div class="metric-bar-wrap"><div class="metric-bar-fill ${tier}" data-w="${pct}%"></div></div>
+        <span class="metric-tag ${tier}">${lbl}</span>
+      </div>`;
+    }
+
+    // ── Retrieval Signals group ────────────────────────────────────────────────
+    const hasSig = sig.reranker_score != null || sig.rrf_signal != null || sig.token_overlap != null;
+    if (hasSig) {
+      html += '<div class="metrics-group-label">Retrieval Signals</div>';
+      if (sig.reranker_score != null) {
+        const pct  = Math.round(sig.reranker_score * 100);
+        const tier = sig.reranker_score >= 0.6 ? 'high' : sig.reranker_score >= 0.3 ? 'medium' : 'low';
+        html += `<div class="metric-row">
+          <span class="metric-name">Reranker Score</span>
+          <span class="metric-val ${tier}">${sig.reranker_score.toFixed(3)}</span>
+          <div class="metric-bar-wrap"><div class="metric-bar-fill ${tier}" data-w="${pct}%"></div></div>
+        </div>`;
+      }
+      if (sig.rrf_signal != null) {
+        const pct  = Math.round(sig.rrf_signal * 100);
+        const tier = sig.rrf_signal >= 0.6 ? 'high' : sig.rrf_signal >= 0.3 ? 'medium' : 'low';
+        html += `<div class="metric-row">
+          <span class="metric-name">RRF Signal</span>
+          <span class="metric-val ${tier}">${sig.rrf_signal.toFixed(3)}</span>
+          <div class="metric-bar-wrap"><div class="metric-bar-fill ${tier}" data-w="${pct}%"></div></div>
+        </div>`;
+      }
+      if (sig.token_overlap != null) {
+        const pct  = Math.round(sig.token_overlap * 100);
+        const tier = sig.token_overlap >= 0.6 ? 'high' : sig.token_overlap >= 0.3 ? 'medium' : 'low';
+        html += `<div class="metric-row">
+          <span class="metric-name">Token Overlap</span>
+          <span class="metric-val ${tier}">${sig.token_overlap.toFixed(3)}</span>
+          <div class="metric-bar-wrap"><div class="metric-bar-fill ${tier}" data-w="${pct}%"></div></div>
+        </div>`;
+      }
+    }
+
+    // ── Performance row ────────────────────────────────────────────────────────
+    html += '<div class="metrics-perf-row">';
+    if (d.latency_ms != null) html += `<span>⚡ Latency <b>${d.latency_ms.toLocaleString()} ms</b></span>`;
+    if (d.model)              html += `<span>Model <b>${d.model.replace('models/', '')}</b></span>`;
+    if (d.usage)              html += `<span>Tokens <b>↑${d.usage.input_tokens||0} ↓${d.usage.output_tokens||0}</b></span>`;
+    if (d.cache_hit)          html += `<span>Cache <b style="color:var(--blue)">Hit ✓</b></span>`;
+    html += '</div>';
+
+    metricsBody.innerHTML = html;
+
+    // Animate progress bars after DOM insert
+    setTimeout(() => {
+      metricsBody.querySelectorAll('.metric-bar-fill').forEach(el => {
+        el.style.width = el.dataset.w;
+      });
+    }, 50);
+  } else {
+    metricsBlock.style.display = 'none';
   }
 
   // Reformulations
@@ -1120,11 +1194,10 @@ function showError(msg) {
   panel.classList.add('visible');
   document.getElementById('answer-box').textContent = '⚠️ ' + msg;
   document.getElementById('answer-box').className = 'answer-box abstain';
-  document.getElementById('conf-block').style.display = 'none';
+  document.getElementById('metrics-block').style.display = 'none';
   document.getElementById('cite-block').style.display = 'none';
   document.getElementById('sources-section').style.display = 'none';
   document.getElementById('reform-block').style.display = 'none';
-  document.getElementById('meta-row').innerHTML = '';
 }
 
 // ── Citation toggle ───────────────────────────────────────────────────────────
