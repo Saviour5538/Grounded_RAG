@@ -160,3 +160,60 @@ def _parse_verdicts(raw: str, n: int) -> list[bool]:
         if m:
             verdicts[int(m.group(1))] = m.group(2).upper() == "YES"
     return [verdicts.get(i + 1, True) for i in range(n)]
+
+
+def faithfulness_from_citations(citations: dict[str, Any]) -> float | None:
+    """Compute per-query faithfulness from existing citation verification data.
+
+    faithfulness = supported_sentences / total_sentences
+
+    Returns None if citation data is unavailable (e.g. abstained answer).
+    """
+    sentences = citations.get("sentences", [])
+    if not sentences:
+        return None
+    supported = sum(1 for s in sentences if s.get("supported") is True)
+    return round(supported / len(sentences), 3)
+
+
+def score_answer_relevancy(
+    query: str,
+    answer: str,
+    api_key: str,
+    model: str,
+) -> float | None:
+    """Score how well the answer addresses the question (0.0–1.0).
+
+    Uses a single Gemini call with thinking_budget=0 to keep latency minimal.
+    Returns None on any API error so the pipeline never fails on this.
+    """
+    if not answer or answer.startswith(_ABSTAIN_PREFIX):
+        return None
+    try:
+        from google import genai
+        from google.genai import types as t
+
+        client = genai.Client(api_key=api_key)
+        prompt = (
+            f"Rate how well the answer addresses the question.\n"
+            f"Question: {query}\n"
+            f"Answer: {answer[:800]}\n\n"
+            f"Reply with a single decimal number between 0.0 and 1.0 only. No other text."
+        )
+        resp = client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config=t.GenerateContentConfig(
+                max_output_tokens=8,
+                temperature=0.0,
+                thinking_config=t.ThinkingConfig(thinking_budget=0),
+            ),
+        )
+        raw = (resp.text or "").strip()
+        m = re.search(r"\d+\.?\d*", raw)
+        if m:
+            val = float(m.group())
+            return round(min(max(val, 0.0), 1.0), 3)
+    except Exception:
+        pass
+    return None

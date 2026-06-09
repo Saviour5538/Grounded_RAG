@@ -24,7 +24,11 @@ from config.settings import Settings
 from config.settings import settings as _default_settings
 from grounded_rag.cache.query_cache import QueryCache
 from grounded_rag.confidence.scorer import ConfidenceScorer
-from grounded_rag.generation.citations import verify_citations
+from grounded_rag.generation.citations import (
+    faithfulness_from_citations,
+    score_answer_relevancy,
+    verify_citations,
+)
 from grounded_rag.generation.generator import Generator
 from grounded_rag.observability.tracer import Tracer
 from grounded_rag.retrieval.dense import DenseRetriever, EmbeddingModel
@@ -204,19 +208,29 @@ class RAGPipeline:
             model=self._llm_model,
         )
 
+        # ── 6. Per-query eval metrics ──────────────────────────────────────────
+        faithfulness = faithfulness_from_citations(citations)
+        answer_relevancy = score_answer_relevancy(
+            question, result["answer"],
+            api_key=self._gemini_api_key,
+            model=self._llm_model,
+        )
+
         latency_ms = round((time.perf_counter() - t0) * 1000)
 
         response: dict[str, Any] = {
-            "answer":          result["answer"],
-            "question":        question,
-            "chunks":          chunks,
-            "model":           result["model"],
-            "usage":           result["usage"],
-            "confidence":      confidence,
-            "citations":       citations,
-            "latency_ms":      latency_ms,
-            "cache_hit":       False,
-            "reformulations":  reformulations,
+            "answer":           result["answer"],
+            "question":         question,
+            "chunks":           chunks,
+            "model":            result["model"],
+            "usage":            result["usage"],
+            "confidence":       confidence,
+            "citations":        citations,
+            "faithfulness":     faithfulness,
+            "answer_relevancy": answer_relevancy,
+            "latency_ms":       latency_ms,
+            "cache_hit":        False,
+            "reformulations":   reformulations,
         }
 
         # ── 6. Cache write (skipped for session queries) ──────────────────────

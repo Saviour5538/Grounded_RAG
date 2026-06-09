@@ -1015,6 +1015,26 @@ function renderAnswer(d, question) {
     const c = mkChip(`↑${d.usage.input_tokens||0} ↓${d.usage.output_tokens||0} tokens`, '');
     metaRow.appendChild(c);
   }
+  if (d.faithfulness != null) {
+    const pct = Math.round(d.faithfulness * 100);
+    const color = d.faithfulness >= 0.7 ? 'var(--green)' : d.faithfulness >= 0.4 ? 'var(--yellow)' : 'var(--red)';
+    const c = mkChip('Faithfulness: ' + pct + '%');
+    const dot = document.createElement('span');
+    dot.className = 'chip-dot';
+    dot.style.background = color;
+    c.prepend(dot);
+    metaRow.appendChild(c);
+  }
+  if (d.answer_relevancy != null) {
+    const pct = Math.round(d.answer_relevancy * 100);
+    const color = d.answer_relevancy >= 0.7 ? 'var(--green)' : d.answer_relevancy >= 0.4 ? 'var(--yellow)' : 'var(--red)';
+    const c = mkChip('Relevancy: ' + pct + '%');
+    const dot = document.createElement('span');
+    dot.className = 'chip-dot';
+    dot.style.background = color;
+    c.prepend(dot);
+    metaRow.appendChild(c);
+  }
 
   // Reformulations
   const reformBlock = document.getElementById('reform-block');

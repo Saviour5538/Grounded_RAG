@@ -91,6 +91,8 @@ class QueryResponse(BaseModel):
     usage: dict[str, Any] | None = None
     confidence: dict[str, Any] | None = None
     citations: dict[str, Any] | None = None
+    faithfulness: float | None = None
+    answer_relevancy: float | None = None
     latency_ms: int | None = None
     cache_hit: bool = False
     reformulations: list[str] = []
