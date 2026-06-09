@@ -114,7 +114,9 @@ def _load_upload_bytes(file_bytes: bytes, filename: str):
             tmp.write(file_bytes)
             tmp_path = Path(tmp.name)
         try:
-            yield from load_pdf(tmp_path)
+            for doc in load_pdf(tmp_path):
+                doc.source = filename   # restore original filename, not the tmp path
+                yield doc
         finally:
             tmp_path.unlink(missing_ok=True)
         return
