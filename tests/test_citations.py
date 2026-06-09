@@ -38,7 +38,8 @@ def test_split_sentences_empty_string():
 
 
 def test_split_sentences_question_and_exclamation():
-    text = "Is this correct? Yes it is! And that matters here."
+    # Short fragments (≤10 chars) are filtered — use long-enough sentences
+    text = "Is this actually correct here? Yes it definitely is true! And that matters."
     parts = _split_sentences(text)
     assert len(parts) == 3
 
