@@ -51,15 +51,30 @@ class RAGPipeline:
             provider=cfg.embedding_provider,
             api_key=_embed_key,
         )
-        dense = DenseRetriever(
-            collection=cfg.qdrant_collection,
-            embedding_model=embedder,
-            dim=cfg.embedding_dim,
-            qdrant_url=cfg.qdrant_url,
-            qdrant_mode=cfg.qdrant_mode,
-            qdrant_local_path=cfg.qdrant_local_path,
-        )
-        sparse = BM25Retriever(qdrant_client=dense.client, collection=cfg.qdrant_collection)
+
+        if cfg.vector_store == "pinecone":
+            from grounded_rag.retrieval.pinecone_retriever import PineconeRetriever
+            dense = PineconeRetriever(
+                api_key=cfg.pinecone_api_key,
+                index_name=cfg.pinecone_index_name,
+                embedding_model=embedder,
+                dim=cfg.embedding_dim,
+                cloud=cfg.pinecone_cloud,
+                region=cfg.pinecone_region,
+            )
+            sparse = BM25Retriever(scroll_fn=dense.scroll_all)
+        else:
+            dense = DenseRetriever(
+                collection=cfg.qdrant_collection,
+                embedding_model=embedder,
+                dim=cfg.embedding_dim,
+                qdrant_url=cfg.qdrant_url,
+                qdrant_mode=cfg.qdrant_mode,
+                qdrant_local_path=cfg.qdrant_local_path,
+                qdrant_api_key=cfg.qdrant_api_key,
+            )
+            sparse = BM25Retriever(qdrant_client=dense.client, collection=cfg.qdrant_collection)
+
         self.retriever = HybridRetriever(dense=dense, sparse=sparse)
 
         # ── Reranker (Phase 4) ─────────────────────────────────────────────────

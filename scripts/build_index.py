@@ -28,7 +28,7 @@ from grounded_rag.ingest.chunker import chunk_document
 from grounded_rag.ingest.dedup import dedup_documents
 from grounded_rag.ingest.loader import load_directory
 from grounded_rag.ingest.metadata import enrich_document
-from grounded_rag.retrieval.dense import DenseRetriever, EmbeddingModel
+from grounded_rag.retrieval.dense import EmbeddingModel
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -57,20 +57,35 @@ def build_index(data_dir: Path, batch_size: int = 50, clear: bool = False) -> No
         provider=settings.embedding_provider,
         api_key=_embed_key,
     )
-    retriever = DenseRetriever(
-        collection=settings.qdrant_collection,
-        embedding_model=embedder,
-        dim=settings.embedding_dim,
-        qdrant_url=settings.qdrant_url,
-        qdrant_mode=settings.qdrant_mode,
-        qdrant_local_path=settings.qdrant_local_path,
-    )
 
-    if clear:
-        existing = {c.name for c in retriever.client.get_collections().collections}
-        if settings.qdrant_collection in existing:
-            retriever.client.delete_collection(settings.qdrant_collection)
-            logger.info("Cleared existing collection '%s'", settings.qdrant_collection)
+    if settings.vector_store == "pinecone":
+        from grounded_rag.retrieval.pinecone_retriever import PineconeRetriever
+        retriever = PineconeRetriever(
+            api_key=settings.pinecone_api_key,
+            index_name=settings.pinecone_index_name,
+            embedding_model=embedder,
+            dim=settings.embedding_dim,
+            cloud=settings.pinecone_cloud,
+            region=settings.pinecone_region,
+        )
+        if clear:
+            retriever.delete_index()
+    else:
+        from grounded_rag.retrieval.dense import DenseRetriever
+        retriever = DenseRetriever(
+            collection=settings.qdrant_collection,
+            embedding_model=embedder,
+            dim=settings.embedding_dim,
+            qdrant_url=settings.qdrant_url,
+            qdrant_mode=settings.qdrant_mode,
+            qdrant_local_path=settings.qdrant_local_path,
+            qdrant_api_key=settings.qdrant_api_key,
+        )
+        if clear:
+            existing = {c.name for c in retriever.client.get_collections().collections}
+            if settings.qdrant_collection in existing:
+                retriever.client.delete_collection(settings.qdrant_collection)
+                logger.info("Cleared existing collection '%s'", settings.qdrant_collection)
 
     retriever.ensure_collection()
 

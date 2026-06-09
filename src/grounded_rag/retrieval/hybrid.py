@@ -10,8 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from grounded_rag.retrieval.dense import DenseRetriever
-from grounded_rag.retrieval.sparse import BM25Retriever
+from typing import Any as _Any
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +20,8 @@ class HybridRetriever:
 
     def __init__(
         self,
-        dense: DenseRetriever,
-        sparse: BM25Retriever,
+        dense: _Any,
+        sparse: _Any,
         rrf_k: int = 60,
     ):
         self.dense = dense

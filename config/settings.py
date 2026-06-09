@@ -10,12 +10,24 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # ── Vector DB ─────────────────────────────────────────────────────────────
+    # ── Vector store ──────────────────────────────────────────────────────────
+    # "qdrant"   → local file mode or self-hosted / Qdrant Cloud
+    # "pinecone" → Pinecone Serverless (free tier, recommended for cloud)
+    vector_store: Literal["qdrant", "pinecone"] = "pinecone"
+
+    # ── Pinecone (used when vector_store="pinecone") ───────────────────────────
+    pinecone_api_key: str = ""
+    pinecone_index_name: str = "grounded-rag"
+    pinecone_cloud: str = "aws"
+    pinecone_region: str = "us-east-1"
+
+    # ── Qdrant (used when vector_store="qdrant") ──────────────────────────────
     # mode "local"  → stores data in qdrant_local_path (no Docker needed)
     # mode "server" → connects to a running Qdrant server at qdrant_url
     qdrant_mode: Literal["local", "server"] = "local"
     qdrant_local_path: str = "./qdrant_data"
     qdrant_url: str = "http://localhost:6333"
+    qdrant_api_key: str = ""
     qdrant_collection: str = "grounded_rag"
 
     # ── Embeddings ────────────────────────────────────────────────────────────

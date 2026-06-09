@@ -21,15 +21,25 @@ def _tokenize(text: str) -> list[str]:
 
 
 class BM25Retriever:
-    """Sparse BM25 retriever backed by the Qdrant chunk corpus.
+    """Sparse BM25 retriever backed by either Qdrant or any vector store.
 
-    The BM25 index is built lazily on the first retrieve() call by scrolling all
-    stored points from the Qdrant collection. Subsequent calls use the cached index.
+    Pass either:
+      - qdrant_client + collection  (Qdrant mode, scrolls via Qdrant API)
+      - scroll_fn                   (Pinecone / any store mode — callable returning
+                                     list[dict] of all chunks)
+
+    The BM25 index is built lazily on the first retrieve() call and cached.
     """
 
-    def __init__(self, qdrant_client: Any, collection: str):
+    def __init__(
+        self,
+        qdrant_client: Any = None,
+        collection: str = "",
+        scroll_fn: Any = None,
+    ):
         self.client = qdrant_client
         self.collection = collection
+        self._scroll_fn = scroll_fn
         self._corpus: list[dict[str, Any]] = []
         self._bm25: Any = None
 
@@ -37,32 +47,35 @@ class BM25Retriever:
         from rank_bm25 import BM25Okapi
 
         t0 = time.time()
-        logger.info("Building BM25 index — scrolling Qdrant collection '%s'…", self.collection)
 
-        offset = None
-        while True:
-            result, offset = self.client.scroll(
-                collection_name=self.collection,
-                limit=1000,
-                with_payload=True,
-                offset=offset,
-            )
-            for point in result:
-                p = point.payload
-                self._corpus.append({
-                    "chunk_id":    p["chunk_id"],
-                    "doc_id":      p["doc_id"],
-                    "text":        p["text"],
-                    "source":      p.get("source", ""),
-                    "score":       0.0,
-                    "chunk_index": p.get("chunk_index", 0),
-                    "metadata": {
-                        k: v for k, v in p.items()
-                        if k not in {"chunk_id", "doc_id", "text", "source", "chunk_index"}
-                    },
-                })
-            if offset is None:
-                break
+        if self._scroll_fn is not None:
+            self._corpus = self._scroll_fn()
+        else:
+            logger.info("Building BM25 index — scrolling Qdrant collection '%s'…", self.collection)
+            offset = None
+            while True:
+                result, offset = self.client.scroll(
+                    collection_name=self.collection,
+                    limit=1000,
+                    with_payload=True,
+                    offset=offset,
+                )
+                for point in result:
+                    p = point.payload
+                    self._corpus.append({
+                        "chunk_id":    p["chunk_id"],
+                        "doc_id":      p["doc_id"],
+                        "text":        p["text"],
+                        "source":      p.get("source", ""),
+                        "score":       0.0,
+                        "chunk_index": p.get("chunk_index", 0),
+                        "metadata": {
+                            k: v for k, v in p.items()
+                            if k not in {"chunk_id", "doc_id", "text", "source", "chunk_index"}
+                        },
+                    })
+                if offset is None:
+                    break
 
         tokenized = [_tokenize(c["text"]) for c in self._corpus]
         self._bm25 = BM25Okapi(tokenized)

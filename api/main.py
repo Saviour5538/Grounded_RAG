@@ -155,20 +155,35 @@ def _run_ingest_job(
             provider=settings.embedding_provider,
             api_key=embed_key,
         )
-        retriever = DenseRetriever(
-            collection=settings.qdrant_collection,
-            embedding_model=embedder,
-            dim=settings.embedding_dim,
-            qdrant_url=settings.qdrant_url,
-            qdrant_mode=settings.qdrant_mode,
-            qdrant_local_path=settings.qdrant_local_path,
-        )
 
-        if clear_existing:
-            existing = {c.name for c in retriever.client.get_collections().collections}
-            if settings.qdrant_collection in existing:
-                retriever.client.delete_collection(settings.qdrant_collection)
-                logger.info("[job %s] Cleared existing collection", job_id)
+        if settings.vector_store == "pinecone":
+            from grounded_rag.retrieval.pinecone_retriever import PineconeRetriever
+            retriever = PineconeRetriever(
+                api_key=settings.pinecone_api_key,
+                index_name=settings.pinecone_index_name,
+                embedding_model=embedder,
+                dim=settings.embedding_dim,
+                cloud=settings.pinecone_cloud,
+                region=settings.pinecone_region,
+            )
+            if clear_existing:
+                retriever.delete_index()
+                logger.info("[job %s] Deleted Pinecone index", job_id)
+        else:
+            retriever = DenseRetriever(
+                collection=settings.qdrant_collection,
+                embedding_model=embedder,
+                dim=settings.embedding_dim,
+                qdrant_url=settings.qdrant_url,
+                qdrant_mode=settings.qdrant_mode,
+                qdrant_local_path=settings.qdrant_local_path,
+                qdrant_api_key=settings.qdrant_api_key,
+            )
+            if clear_existing:
+                existing = {c.name for c in retriever.client.get_collections().collections}
+                if settings.qdrant_collection in existing:
+                    retriever.client.delete_collection(settings.qdrant_collection)
+                    logger.info("[job %s] Cleared existing collection", job_id)
 
         retriever.ensure_collection()
 

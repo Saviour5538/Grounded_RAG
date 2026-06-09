@@ -131,12 +131,17 @@ class DenseRetriever:
         qdrant_url: str = "http://localhost:6333",
         qdrant_mode: str = "local",
         qdrant_local_path: str = "./qdrant_data",
+        qdrant_api_key: str = "",
     ):
         if qdrant_mode == "local":
             self.client = QdrantClient(path=qdrant_local_path)
             logger.info("Using local Qdrant storage at: %s", qdrant_local_path)
         else:
-            self.client = QdrantClient(url=qdrant_url, timeout=60)
+            self.client = QdrantClient(
+                url=qdrant_url,
+                api_key=qdrant_api_key or None,
+                timeout=60,
+            )
             logger.info("Connecting to Qdrant server at: %s", qdrant_url)
         self.collection = collection
         self.embedder = embedding_model
