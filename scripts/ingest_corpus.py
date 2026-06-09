@@ -68,24 +68,35 @@ def download_scifact(out_dir: Path) -> None:
     logger.info("Wrote %d queries → %s", written, queries_path)
 
     # ── Qrels (claim → has evidence in corpus) ────────────────────────────────
-    # In BeIR SciFact, any claim_id present in qrels has supporting/refuting
-    # evidence. Claims absent from qrels are "NOT_ENOUGH_INFO" — the pipeline
-    # should abstain on those. We store the set as a JSONL for the eval harness.
-    logger.info("Downloading SciFact qrels...")
+    # Use ir_datasets which bundles BEIR qrels as tiny TSV files (no ML models).
+    # Claims present in qrels have supporting/refuting evidence; absent = NOT_ENOUGH_INFO.
+    logger.info("Downloading SciFact qrels via ir_datasets...")
     try:
-        qrels_ds = load_dataset("BeIR/scifact", "qrels")
+        import ir_datasets
+
         claims_with_evidence: set[str] = set()
-        for split in qrels_ds:
-            for item in qrels_ds[split]:
-                if item.get("score", 0) >= 1:
-                    claims_with_evidence.add(str(item["query-id"]))
-        qrels_path = out_dir / "scifact_qrels.jsonl"
-        with qrels_path.open("w", encoding="utf-8") as f:
-            for claim_id in sorted(claims_with_evidence):
-                f.write(json.dumps({"claim_id": claim_id, "has_evidence": True}) + "\n")
-        logger.info(
-            "Wrote %d claims-with-evidence → %s", len(claims_with_evidence), qrels_path
-        )
+        for split_path in ("beir/scifact/train", "beir/scifact/test"):
+            try:
+                ds = ir_datasets.load(split_path)
+                for qrel in ds.qrels_iter():
+                    if qrel.relevance >= 1:
+                        claims_with_evidence.add(str(qrel.query_id))
+                logger.info("Loaded qrels from %s", split_path)
+            except Exception as inner_e:
+                logger.debug("Could not load %s: %s", split_path, inner_e)
+
+        if claims_with_evidence:
+            qrels_path = out_dir / "scifact_qrels.jsonl"
+            with qrels_path.open("w", encoding="utf-8") as f:
+                for claim_id in sorted(claims_with_evidence, key=lambda x: int(x) if x.isdigit() else x):
+                    f.write(json.dumps({"claim_id": claim_id, "has_evidence": True}) + "\n")
+            logger.info(
+                "Wrote %d claims-with-evidence → %s", len(claims_with_evidence), qrels_path
+            )
+        else:
+            logger.warning("No qrels found — abstention-correctness eval will be skipped")
+    except ImportError:
+        logger.warning("ir_datasets not installed — run: pip install ir-datasets")
     except Exception as e:
         logger.warning("Could not download qrels (%s) — abstention-correctness eval will be skipped", e)
 
