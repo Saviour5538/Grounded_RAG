@@ -12,6 +12,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -21,12 +22,13 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from queue import Queue
 from typing import Any
 
 _MAX_HISTORY_TURNS = 5   # how many prior Q&A turns to keep per session
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
 # Ensure project root is on the path when running directly.
@@ -308,6 +310,74 @@ async def query(request: QueryRequest):
         _sessions[session_id] = _sessions[session_id][-_MAX_HISTORY_TURNS:]
 
     return QueryResponse(**result, session_id=session_id, history_turns=len(history))
+
+
+@app.post("/query/stream")
+async def query_stream(request: QueryRequest):
+    """Stream the answer token-by-token via Server-Sent Events.
+
+    Event types (all JSON after 'data: '):
+      retrieval — confidence + reranked chunks (sent before generation starts)
+      token     — one text piece from the LLM
+      meta      — full result: citations, metrics, latency (sent after generation)
+      abstain   — emitted instead of token+meta when confidence is too low
+      error     — pipeline exception
+      done      — stream closed
+    """
+    if _pipeline is None:
+        raise HTTPException(status_code=503, detail="Pipeline not initialised")
+
+    session_id = request.session_id
+    history: list[dict[str, Any]] = list(_sessions.get(session_id, [])) if session_id else []
+
+    q: Queue = Queue()
+    loop = asyncio.get_running_loop()
+
+    def _run_sync() -> None:
+        try:
+            for chunk in _pipeline.query_stream(request.question, history=history or None):
+                q.put(chunk)
+        except Exception as exc:
+            q.put(f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n")
+        finally:
+            q.put(None)  # sentinel — signals end of stream
+
+    loop.run_in_executor(None, _run_sync)
+
+    async def _agen():
+        while True:
+            chunk: str | None = await loop.run_in_executor(None, q.get)
+            if chunk is None:
+                break
+            # Intercept meta event to update session memory
+            if session_id and chunk.startswith("data: "):
+                try:
+                    evt = json.loads(chunk[6:])
+                    if evt.get("type") == "meta":
+                        if session_id not in _sessions:
+                            _sessions[session_id] = []
+                        _sessions[session_id].append({
+                            "question": request.question,
+                            "answer":   evt.get("answer", ""),
+                        })
+                        _sessions[session_id] = _sessions[session_id][-_MAX_HISTORY_TURNS:]
+                    elif evt.get("type") == "abstain":
+                        if session_id not in _sessions:
+                            _sessions[session_id] = []
+                        _sessions[session_id].append({
+                            "question": request.question,
+                            "answer":   evt.get("answer", ""),
+                        })
+                        _sessions[session_id] = _sessions[session_id][-_MAX_HISTORY_TURNS:]
+                except Exception:
+                    pass
+            yield chunk
+
+    return StreamingResponse(
+        _agen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.delete("/session/{session_id}", include_in_schema=False)

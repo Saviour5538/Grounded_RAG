@@ -8,7 +8,7 @@ before the LLM is even called.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -153,3 +153,101 @@ class Generator:
             "usage": usage,
             "num_context_chunks": len(chunks),
         }
+
+    def generate_stream(
+        self,
+        query: str,
+        chunks: list[dict[str, Any]],
+        history: list[dict[str, Any]] | None = None,
+    ) -> Iterator[str | dict[str, Any]]:
+        """Stream the LLM answer token by token.
+
+        Yields str pieces while generating, then yields one final dict
+        {"answer", "model", "usage", "num_context_chunks"} as the last item.
+        Callers distinguish str (token) from dict (sentinel) by type().
+        """
+        context = _build_context_block(chunks)
+        if history:
+            history_block = _build_history_block(history)
+            user_message = (
+                f"Previous conversation:\n{history_block}\n\n"
+                f"Context passages:\n\n{context}\n\n"
+                f"Question: {query}"
+            )
+        else:
+            user_message = f"Context passages:\n\n{context}\n\nQuestion: {query}"
+
+        client = self._get_client()
+
+        if self.provider == "gemini":
+            from google.genai import types as genai_types
+            full_text: list[str] = []
+            usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
+            for chunk in client.models.generate_content_stream(
+                model=self.model,
+                contents=user_message,
+                config=genai_types.GenerateContentConfig(
+                    system_instruction=_SYSTEM_PROMPT,
+                    max_output_tokens=self.max_tokens,
+                ),
+            ):
+                if chunk.text:
+                    full_text.append(chunk.text)
+                    yield chunk.text
+                if getattr(chunk, "usage_metadata", None):
+                    meta = chunk.usage_metadata
+                    usage = {
+                        "input_tokens":  meta.prompt_token_count or 0,
+                        "output_tokens": meta.candidates_token_count or 0,
+                    }
+            yield {
+                "answer":             "".join(full_text),
+                "model":              self.model,
+                "usage":              usage,
+                "num_context_chunks": len(chunks),
+            }
+
+        elif self.provider == "anthropic":
+            full_text = []
+            with client.messages.stream(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                system=_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user_message}],
+            ) as stream:
+                for text in stream.text_stream:
+                    full_text.append(text)
+                    yield text
+                resp = stream.get_final_message()
+            yield {
+                "answer":             "".join(full_text),
+                "model":              self.model,
+                "usage":              {
+                    "input_tokens":  resp.usage.input_tokens,
+                    "output_tokens": resp.usage.output_tokens,
+                },
+                "num_context_chunks": len(chunks),
+            }
+
+        else:  # openai
+            full_text = []
+            stream = client.chat.completions.create(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                messages=[
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user",   "content": user_message},
+                ],
+                stream=True,
+            )
+            for event in stream:
+                delta = event.choices[0].delta.content or ""
+                if delta:
+                    full_text.append(delta)
+                    yield delta
+            yield {
+                "answer":             "".join(full_text),
+                "model":              self.model,
+                "usage":              {"input_tokens": 0, "output_tokens": 0},
+                "num_context_chunks": len(chunks),
+            }

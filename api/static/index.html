@@ -497,6 +497,15 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    /* Streaming cursor */
+    .answer-box.streaming::after {
+      content: '▊';
+      animation: blink 0.6s step-end infinite;
+      color: var(--text3);
+      margin-left: 1px;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+
     /* ── Conversation thread ── */
     .convo-thread {
       display: none;
@@ -950,6 +959,34 @@ document.getElementById('new-convo-btn').addEventListener('click', newSession);
 const queryBtn = document.getElementById('query-btn');
 const qInput   = document.getElementById('question-input');
 
+// ── Streaming helpers ─────────────────────────────────────────────────────────
+
+let _streamBuffer = '';
+
+function _streamStart() {
+  _streamBuffer = '';
+  const panel = document.getElementById('answer-panel');
+  panel.classList.add('visible');
+  document.getElementById('metrics-block').style.display = 'none';
+  document.getElementById('cite-block').style.display = 'none';
+  document.getElementById('sources-section').style.display = 'none';
+  document.getElementById('reform-block').style.display = 'none';
+  const box = document.getElementById('answer-box');
+  box.textContent = '';
+  box.className = 'answer-box streaming';
+}
+
+function _streamToken(text) {
+  _streamBuffer += text;
+  document.getElementById('answer-box').textContent = _streamBuffer;
+}
+
+function _streamEnd() {
+  document.getElementById('answer-box').classList.remove('streaming');
+}
+
+// ── Query (streaming) ─────────────────────────────────────────────────────────
+
 async function runQuery() {
   const q = qInput.value.trim();
   if (!q) return;
@@ -957,12 +994,12 @@ async function runQuery() {
   queryBtn.disabled = true;
   queryBtn.innerHTML = '<span class="spinner"></span>';
   document.getElementById('empty-state').style.display = 'none';
-  document.getElementById('answer-panel').classList.remove('visible');
   document.getElementById('cache-badge').style.display = 'none';
   document.getElementById('history-badge').style.display = 'none';
+  _streamStart();
 
   try {
-    const r = await fetch('/query', {
+    const r = await fetch('/query/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ question: q, session_id: getSessionId() }),
@@ -972,11 +1009,60 @@ async function runQuery() {
       showError('Error: ' + (e.detail || r.statusText));
       return;
     }
-    const d = await r.json();
-    renderAnswer(d, q);
+
+    const reader  = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop();    // keep the incomplete last line
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        let evt;
+        try { evt = JSON.parse(line.slice(6)); } catch { continue; }
+
+        if (evt.type === 'token') {
+          _streamToken(evt.text);
+
+        } else if (evt.type === 'abstain') {
+          _streamEnd();
+          renderAnswer({
+            answer:           evt.answer,
+            question:         q,
+            confidence:       evt.confidence,
+            latency_ms:       evt.latency_ms,
+            reformulations:   evt.reformulations || [],
+            chunks:           [],
+            citations:        null,
+            faithfulness:     null,
+            answer_relevancy: null,
+            cache_hit:        false,
+            model:            null,
+            usage:            null,
+          }, q);
+
+        } else if (evt.type === 'meta') {
+          _streamEnd();
+          renderAnswer({ ...evt, type: undefined, question: q }, q);
+
+        } else if (evt.type === 'error') {
+          _streamEnd();
+          showError('Pipeline error: ' + evt.message);
+        }
+        // 'retrieval' and 'done' are not rendered directly
+      }
+    }
+
   } catch (e) {
     showError('Request failed: ' + e.message);
   } finally {
+    _streamEnd();
     queryBtn.disabled = false;
     queryBtn.textContent = 'Ask';
     qInput.value = '';

@@ -16,9 +16,10 @@ Full flow per query:
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
-from typing import Any
+from typing import Any, Iterator
 
 from config.settings import Settings
 from config.settings import settings as _default_settings
@@ -254,6 +255,164 @@ class RAGPipeline:
         })
 
         return response
+
+    def query_stream(
+        self,
+        question: str,
+        history: list[dict[str, Any]] | None = None,
+    ) -> Iterator[str]:
+        """Synchronous generator that yields SSE-formatted strings.
+
+        Event sequence:
+          retrieval — confidence + chunks, sent immediately after reranking
+          token     — one LLM output text piece
+          meta      — full result (citations, metrics, latency, answer)
+          done      — end of stream
+          abstain   — emitted instead of token+meta when confidence too low
+          error     — emitted on unexpected exception
+        """
+
+        def _sse(obj: dict) -> str:
+            return f"data: {json.dumps(obj, default=str)}\n\n"
+
+        t0 = time.perf_counter()
+
+        # ── 0. Cache check ────────────────────────────────────────────────────
+        if self.cache and not history:
+            cached = self.cache.get(question)
+            if cached:
+                latency_ms = round((time.perf_counter() - t0) * 1000)
+                yield _sse({"type": "retrieval",
+                             "confidence": cached.get("confidence", {}),
+                             "chunks": cached.get("chunks", []),
+                             "reformulations": []})
+                yield _sse({"type": "token", "text": cached.get("answer", "")})
+                yield _sse({"type": "meta",
+                             "answer":           cached.get("answer"),
+                             "model":            cached.get("model"),
+                             "usage":            cached.get("usage"),
+                             "confidence":       cached.get("confidence"),
+                             "citations":        cached.get("citations"),
+                             "faithfulness":     cached.get("faithfulness"),
+                             "answer_relevancy": cached.get("answer_relevancy"),
+                             "latency_ms":       latency_ms,
+                             "chunks":           cached.get("chunks", []),
+                             "cache_hit":        True,
+                             "reformulations":   []})
+                yield _sse({"type": "done"})
+                return
+
+        # ── 1-3. Retrieve → rerank → confidence (with agentic retry) ─────────
+        active_query   = question
+        reformulations: list[str]        = []
+        candidates:     list[dict[str, Any]] = []
+        chunks:         list[dict[str, Any]] = []
+        confidence: dict[str, Any] = {"score": 0.0, "signals": {}, "abstain": True}
+
+        try:
+            for attempt in range(self._max_retries + 1):
+                candidates = self.retriever.retrieve(active_query, top_k=self._retrieve_k)
+                if not candidates:
+                    break
+                chunks     = self.reranker.rerank(active_query, candidates)
+                confidence = self.confidence_scorer.compute(active_query, chunks)
+                if not confidence["abstain"]:
+                    break
+                if self.reformulator and attempt < self._max_retries:
+                    rewritten = self.reformulator.reformulate(question, attempt)
+                    if rewritten != active_query and rewritten not in reformulations:
+                        reformulations.append(rewritten)
+                        active_query = rewritten
+                    else:
+                        break
+        except Exception as exc:
+            logger.error("Retrieval/rerank failed during stream: %s", exc)
+            yield _sse({"type": "error", "message": str(exc)})
+            yield _sse({"type": "done"})
+            return
+
+        yield _sse({"type": "retrieval",
+                    "confidence":    confidence,
+                    "chunks":        chunks,
+                    "reformulations": reformulations})
+
+        # ── Abstain path ──────────────────────────────────────────────────────
+        if confidence["abstain"]:
+            latency_ms = round((time.perf_counter() - t0) * 1000)
+            logger.info("Stream abstaining — confidence %.3f", confidence["score"])
+            yield _sse({"type": "abstain",
+                         "answer":         _ABSTAIN,
+                         "confidence":     confidence,
+                         "latency_ms":     latency_ms,
+                         "reformulations": reformulations})
+            yield _sse({"type": "done"})
+            self.tracer.log({"query": question, "answer": _ABSTAIN, "abstained": True,
+                              "confidence": confidence.get("score", 0.0),
+                              "latency_ms": latency_ms, "reformulations": reformulations,
+                              "cache_hit": False})
+            return
+
+        # ── 4. Stream LLM tokens ──────────────────────────────────────────────
+        gen_result: dict[str, Any] = {}
+        try:
+            for piece in self.generator.generate_stream(active_query, chunks, history=history):
+                if isinstance(piece, str):
+                    yield _sse({"type": "token", "text": piece})
+                else:
+                    gen_result = piece  # final dict sentinel
+        except Exception as exc:
+            logger.error("Generation streaming failed: %s", exc)
+            yield _sse({"type": "error", "message": str(exc)})
+            yield _sse({"type": "done"})
+            return
+
+        answer = gen_result.get("answer", "")
+
+        # ── 5. Citation verification + per-query metrics ──────────────────────
+        citations      = verify_citations(answer, chunks,
+                                          api_key=self._gemini_api_key,
+                                          model=self._llm_model)
+        faithfulness   = faithfulness_from_citations(citations)
+        answer_relevancy = score_answer_relevancy(question, answer,
+                                                   api_key=self._gemini_api_key,
+                                                   model=self._llm_model)
+        latency_ms = round((time.perf_counter() - t0) * 1000)
+
+        response: dict[str, Any] = {
+            "answer":           answer,
+            "question":         question,
+            "chunks":           chunks,
+            "model":            gen_result.get("model"),
+            "usage":            gen_result.get("usage"),
+            "confidence":       confidence,
+            "citations":        citations,
+            "faithfulness":     faithfulness,
+            "answer_relevancy": answer_relevancy,
+            "latency_ms":       latency_ms,
+            "cache_hit":        False,
+            "reformulations":   reformulations,
+        }
+
+        if self.cache and not history:
+            self.cache.set(question, response)
+
+        self.tracer.log({
+            "query":               question,
+            "answer":              answer,
+            "latency_ms":          latency_ms,
+            "n_candidates":        len(candidates),
+            "n_reranked":          len(chunks),
+            "confidence":          confidence["score"],
+            "abstained":           False,
+            "uncited_count":       citations["uncited_count"],
+            "unsupported_count":   citations["unsupported_count"],
+            "verification_passed": citations["verification_passed"],
+            "reformulations":      reformulations,
+            "cache_hit":           False,
+        })
+
+        yield _sse({"type": "meta", **response})
+        yield _sse({"type": "done"})
 
     def _abstain(
         self,
