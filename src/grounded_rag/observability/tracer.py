@@ -67,19 +67,34 @@ class Tracer:
             try:
                 abstained = trace.get("abstained", False)
                 meta = {k: v for k, v in trace.items() if k not in {"query", "answer", "ts"}}
-                t = self._lf.trace(
+                # Langfuse v4 (OTel-based): use start_as_current_observation; no .trace() method
+                with self._lf.start_as_current_observation(
                     name="rag_query",
+                    as_type="chain",
                     input={"question": trace.get("query")},
                     output=trace.get("answer"),
                     metadata=meta,
-                    tags=["abstained"] if abstained else [],
-                )
-                t.generation(
-                    name="llm_answer",
-                    input=trace.get("query"),
-                    output=trace.get("answer"),
-                    metadata=meta,
-                )
+                ):
+                    self._lf.set_current_trace_io(
+                        input={"question": trace.get("query")},
+                        output=trace.get("answer"),
+                    )
+                    conf = trace.get("confidence")
+                    if conf is not None:
+                        self._lf.score_current_trace(
+                            name="confidence",
+                            value=float(conf),
+                            data_type="NUMERIC",
+                        )
+                    if not abstained:
+                        with self._lf.start_as_current_observation(
+                            name="llm_generation",
+                            as_type="generation",
+                            input=trace.get("query"),
+                            output=trace.get("answer"),
+                            metadata=meta,
+                        ):
+                            pass
                 self._lf.flush()
             except Exception as exc:
                 logger.warning("Langfuse trace failed: %s", exc)

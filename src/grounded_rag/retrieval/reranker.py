@@ -14,6 +14,8 @@ import logging
 import re
 from typing import Any
 
+from grounded_rag.utils import call_with_retry
+
 logger = logging.getLogger(__name__)
 
 _SCORE_RE = re.compile(r"\[\s*\d+(?:\s*,\s*\d+)*\s*\]")
@@ -66,15 +68,19 @@ class GeminiReranker:
 
         try:
             from google.genai import types as t
-            resp = self._client.models.generate_content(
-                model=self.model,
-                contents=prompt,
-                config=t.GenerateContentConfig(
-                    max_output_tokens=1024,
-                    temperature=0.0,
-                    thinking_config=t.ThinkingConfig(thinking_budget=0),
-                ),
-            )
+
+            def _call():
+                return self._client.models.generate_content(
+                    model=self.model,
+                    contents=prompt,
+                    config=t.GenerateContentConfig(
+                        max_output_tokens=1024,
+                        temperature=0.0,
+                        thinking_config=t.ThinkingConfig(thinking_budget=0),
+                    ),
+                )
+
+            resp = call_with_retry(_call, label="Reranker")
             raw = (resp.text or "").strip()
             # Find all candidate arrays; pick the last one with correct length
             candidates = _SCORE_RE.findall(raw)
@@ -106,10 +112,11 @@ class GeminiReranker:
         except Exception as exc:
             logger.warning("Reranker failed (%s) — falling back to score order", exc)
 
-        # Fallback: score order, mark as unscored
+        # Fallback: score order, use neutral 0.5 so confidence scoring isn't penalised
+        # by a missing reranker signal (e.g. transient 503).
         result = []
         for chunk in chunks[: self.top_n]:
             c = dict(chunk)
-            c["reranker_score"] = c.get("score", 0.0)
+            c["reranker_score"] = 0.5
             result.append(c)
         return result

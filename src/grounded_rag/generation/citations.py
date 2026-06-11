@@ -132,15 +132,20 @@ def _batch_verify(
     )
 
     try:
-        resp = client.models.generate_content(
-            model=model,
-            contents=prompt,
-            config=t.GenerateContentConfig(
-                max_output_tokens=n * 8,
-                temperature=0.0,
-                thinking_config=t.ThinkingConfig(thinking_budget=0),
-            ),
-        )
+        from grounded_rag.utils import call_with_retry
+
+        def _call():
+            return client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=t.GenerateContentConfig(
+                    max_output_tokens=n * 10,
+                    temperature=0.0,
+                    thinking_config=t.ThinkingConfig(thinking_budget=0),
+                ),
+            )
+
+        resp = call_with_retry(_call, label="CitationVerifier")
         raw = (resp.text or "").strip()
         verdicts = _parse_verdicts(raw, n)
     except Exception:
@@ -192,27 +197,35 @@ def score_answer_relevancy(
     try:
         from google import genai
         from google.genai import types as t
+        from grounded_rag.utils import call_with_retry
 
         client = genai.Client(api_key=api_key)
         prompt = (
-            f"Rate how well the answer addresses the question.\n"
-            f"Question: {query}\n"
+            f"You are evaluating a RAG system. Rate how well the answer addresses "
+            f"the topic or question below.\n\n"
+            f"Question/Topic: {query}\n"
             f"Answer: {answer[:800]}\n\n"
-            f"Reply with a single decimal number between 0.0 and 1.0 only. No other text."
+            f"Reply with a single decimal number between 0.0 and 1.0.\n"
+            f"0.0 = completely off-topic, 1.0 = fully addresses the question.\n"
+            f"Output the number only, nothing else."
         )
-        resp = client.models.generate_content(
-            model=model,
-            contents=prompt,
-            config=t.GenerateContentConfig(
-                max_output_tokens=8,
-                temperature=0.0,
-                thinking_config=t.ThinkingConfig(thinking_budget=0),
-            ),
-        )
+
+        def _call():
+            return client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=t.GenerateContentConfig(
+                    max_output_tokens=32,
+                    temperature=0.0,
+                ),
+            )
+
+        resp = call_with_retry(_call, label="AnswerRelevancy")
         raw = (resp.text or "").strip()
-        m = re.search(r"\d+\.?\d*", raw)
-        if m:
-            val = float(m.group())
+        # Match the last decimal number in case Gemini adds preamble
+        matches = re.findall(r"\d+\.?\d*", raw)
+        if matches:
+            val = float(matches[-1])
             return round(min(max(val, 0.0), 1.0), 3)
     except Exception:
         pass

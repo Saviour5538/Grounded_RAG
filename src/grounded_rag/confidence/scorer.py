@@ -18,12 +18,17 @@ _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _MAX_RRF = 2.0 / 61.0
 
 
-def _token_overlap(a: str, b: str) -> float:
-    ta = set(_TOKEN_RE.findall(a.lower()))
-    tb = set(_TOKEN_RE.findall(b.lower()))
-    if not ta or not tb:
+def _token_overlap(query: str, chunk: str) -> float:
+    """Recall-based overlap: fraction of query tokens that appear in the chunk.
+
+    Using recall (not Jaccard) because short queries like "BART" should score
+    high if the chunk mentions BART, not low because the chunk has 200 other tokens.
+    """
+    tq = set(_TOKEN_RE.findall(query.lower()))
+    tc = set(_TOKEN_RE.findall(chunk.lower()))
+    if not tq:
         return 0.0
-    return len(ta & tb) / len(ta | tb)
+    return len(tq & tc) / len(tq)
 
 
 class ConfidenceScorer:
