@@ -4,7 +4,7 @@ Run with:
     uvicorn api.main:app --reload
 
 Endpoints:
-    GET  /             — web UI (upload + query)
+    GET  /             — Gradio UI
     GET  /health       — liveness check
     POST /query        — answer a question from the indexed corpus
     POST /ingest       — upload a JSON/JSONL file and index it
@@ -27,8 +27,9 @@ from typing import Any
 
 _MAX_HISTORY_TURNS = 5   # how many prior Q&A turns to keep per session
 
+import gradio as gr
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 # Ensure project root is on the path when running directly.
@@ -56,7 +57,66 @@ _jobs: dict[str, dict[str, Any]] = {}
 # session_id → [{"question": str, "answer": str}, ...]  (last N turns)
 _sessions: dict[str, list[dict[str, Any]]] = {}
 
-_UI_HTML = Path(__file__).parent / "static" / "index.html"
+def _make_ingest_gen(pipeline):
+    """Return a generator-based ingest callable for the Gradio UI.
+
+    Usage: for update in _make_ingest_gen(pipeline)(file_bytes, filename, clear):
+               ...  # update has keys: status, progress, error
+    """
+    def _ingest(file_bytes: bytes, filename: str, clear_existing: bool):
+        progress = {"docs_total": 0, "docs_processed": 0, "chunks_indexed": 0}
+        yield {"status": "running", "progress": progress}
+
+        try:
+            raw_docs = list(_load_upload_bytes(file_bytes, filename))
+            if not raw_docs:
+                raise ValueError("No documents found. Ensure the file has a 'text', 'content', or 'abstract' field.")
+
+            deduped = list(dedup_documents(iter(raw_docs)))
+            progress["docs_total"] = len(deduped)
+            yield {"status": "running", "progress": dict(progress)}
+
+            # Reuse the pipeline's dense retriever (same Pinecone index)
+            retriever = pipeline.retriever.dense
+            if clear_existing:
+                try:
+                    retriever.delete_index()
+                    logger.info("Gradio ingest: deleted Pinecone index")
+                except Exception:
+                    pass
+            retriever.ensure_collection()
+
+            BATCH = 50
+            pending = []
+            docs_done = 0
+
+            for doc in deduped:
+                enriched = enrich_document(doc)
+                chunks   = chunk_document(enriched, settings.chunk_size, settings.chunk_overlap)
+                pending.extend(chunks)
+                docs_done += 1
+
+                if len(pending) >= BATCH:
+                    progress["chunks_indexed"] += retriever.index_chunks(pending)
+                    progress["docs_processed"] = docs_done
+                    pending = []
+                    yield {"status": "running", "progress": dict(progress)}
+
+            if pending:
+                progress["chunks_indexed"] += retriever.index_chunks(pending)
+                progress["docs_processed"] = docs_done
+
+            # Invalidate BM25 so the next query rebuilds from updated index
+            pipeline.retriever.sparse.invalidate()
+
+            yield {"status": "done", "progress": dict(progress)}
+            logger.info("Gradio ingest done — %d docs, %d chunks", docs_done, progress["chunks_indexed"])
+
+        except Exception as exc:
+            logger.exception("Gradio ingest failed: %s", exc)
+            yield {"status": "error", "progress": progress, "error": str(exc)}
+
+    return _ingest
 
 
 @asynccontextmanager
@@ -65,6 +125,26 @@ async def lifespan(app: FastAPI):
     logger.info("Initialising RAG pipeline...")
     _pipeline = RAGPipeline()
     logger.info("Pipeline ready")
+
+    # Mount Gradio UI at root (theme/css go here in Gradio 6, not in gr.Blocks)
+    from api.gradio_ui import build_demo
+    demo = build_demo(_pipeline, _make_ingest_gen(_pipeline))
+    gr.mount_gradio_app(
+        app, demo, path="/",
+        theme=gr.themes.Soft(
+            primary_hue="violet",
+            secondary_hue="slate",
+            neutral_hue="slate",
+            font=gr.themes.GoogleFont("Inter"),
+            font_mono=gr.themes.GoogleFont("JetBrains Mono"),
+        ),
+        css="""
+        footer { display: none !important; }
+        .metric-table table { width: 100%; font-size: 13px; }
+        """,
+    )
+    logger.info("Gradio UI mounted at /")
+
     yield
     _pipeline = None
 
@@ -265,13 +345,6 @@ def _run_ingest_job(
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
-
-@app.get("/", response_class=HTMLResponse, include_in_schema=False)
-async def ui():
-    if _UI_HTML.exists():
-        return _UI_HTML.read_text(encoding="utf-8")
-    return HTMLResponse("<h2>UI not found — run with api/static/index.html present.</h2>")
-
 
 @app.get("/health")
 async def health():
