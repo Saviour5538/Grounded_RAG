@@ -138,10 +138,6 @@ async def lifespan(app: FastAPI):
             font=gr.themes.GoogleFont("Inter"),
             font_mono=gr.themes.GoogleFont("JetBrains Mono"),
         ),
-        css="""
-        footer { display: none !important; }
-        .metric-table table { width: 100%; font-size: 13px; }
-        """,
     )
     logger.info("Gradio UI mounted at /")
 
@@ -150,8 +146,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Grounded RAG",
-    description="RAG pipeline with grounded, citable answers and confidence-based abstention.",
+    title="Verity",
+    description="Grounded RAG pipeline with cited proof and confidence-based abstention.",
     version="0.1.0",
     lifespan=lifespan,
 )
