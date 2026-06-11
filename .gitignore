@@ -16,6 +16,7 @@ env/
 # Data (potentially large)
 data/raw/
 data/processed/
+data/bm25_index.pkl
 
 # Qdrant local storage volume
 qdrant_storage/

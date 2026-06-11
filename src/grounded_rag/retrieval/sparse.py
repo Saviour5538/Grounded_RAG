@@ -1,14 +1,19 @@
-"""BM25 sparse retrieval over the Qdrant chunk corpus.
+"""BM25 sparse retrieval over the chunk corpus.
 
-Builds an in-memory BM25Okapi index by scrolling all chunks from Qdrant on the
-first retrieve() call, then caches the index for subsequent queries.
-No local ML models — pure keyword frequency statistics (rank_bm25 package).
+Builds an in-memory BM25Okapi index by scrolling all chunks from the vector
+store on the first retrieve() call.  The index is persisted to a pickle file
+so subsequent server restarts load in milliseconds instead of re-scrolling.
+
+Invalidation (e.g. after new chunks are indexed) deletes the pickle and forces
+a full rebuild on the next query.
 """
 from __future__ import annotations
 
 import logging
+import pickle
 import re
 import time
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -25,10 +30,11 @@ class BM25Retriever:
 
     Pass either:
       - qdrant_client + collection  (Qdrant mode, scrolls via Qdrant API)
-      - scroll_fn                   (Pinecone / any store mode — callable returning
-                                     list[dict] of all chunks)
+      - scroll_fn                   (Pinecone / any store mode — callable
+                                     returning list[dict] of all chunks)
 
-    The BM25 index is built lazily on the first retrieve() call and cached.
+    The BM25 index is built lazily on the first retrieve() call, persisted to
+    cache_path, and reloaded from disk on subsequent server starts.
     """
 
     def __init__(
@@ -36,16 +42,54 @@ class BM25Retriever:
         qdrant_client: Any = None,
         collection: str = "",
         scroll_fn: Any = None,
+        cache_path: str = "data/bm25_index.pkl",
     ):
         self.client = qdrant_client
         self.collection = collection
         self._scroll_fn = scroll_fn
+        self._cache_path = Path(cache_path)
         self._corpus: list[dict[str, Any]] = []
         self._bm25: Any = None
+
+    def _load_from_disk(self) -> bool:
+        """Try to load index from the pickle cache. Returns True on success."""
+        if not self._cache_path.exists():
+            return False
+        try:
+            t0 = time.time()
+            with self._cache_path.open("rb") as f:
+                saved = pickle.load(f)
+            self._corpus = saved["corpus"]
+            self._bm25   = saved["bm25"]
+            logger.info(
+                "BM25 index loaded from disk cache: %d chunks in %.2fs",
+                len(self._corpus), time.time() - t0,
+            )
+            return True
+        except Exception as exc:
+            logger.warning("BM25 disk cache corrupt or unreadable (%s) — will rebuild", exc)
+            self._corpus = []
+            self._bm25   = None
+            return False
+
+    def _save_to_disk(self) -> None:
+        """Persist the current index to the pickle cache."""
+        try:
+            self._cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._cache_path.open("wb") as f:
+                pickle.dump({"corpus": self._corpus, "bm25": self._bm25}, f)
+            logger.info("BM25 index saved to disk: %s", self._cache_path)
+        except Exception as exc:
+            logger.warning("BM25 cache save failed (non-fatal): %s", exc)
 
     def _build_index(self) -> None:
         from rank_bm25 import BM25Okapi
 
+        # Fast path — load from disk if available
+        if self._load_from_disk():
+            return
+
+        # Slow path — scroll vector store and build from scratch
         t0 = time.time()
 
         if self._scroll_fn is not None:
@@ -83,19 +127,27 @@ class BM25Retriever:
 
         tokenized = [_tokenize(c["text"]) for c in self._corpus]
         self._bm25 = BM25Okapi(tokenized)
-        logger.info(
-            "BM25 index ready: %d chunks in %.1fs", len(self._corpus), time.time() - t0
-        )
+        logger.info("BM25 index built: %d chunks in %.1fs", len(self._corpus), time.time() - t0)
+
+        self._save_to_disk()
 
     def invalidate(self) -> None:
-        """Drop the cached BM25 index so it rebuilds on the next retrieve() call.
+        """Drop the in-memory index and delete the disk cache.
 
-        Call this after new chunks are indexed so the BM25 corpus stays in sync
-        with the vector store.
+        Call this after new chunks are indexed so the next query rebuilds
+        from the updated vector store.
         """
         self._corpus = []
-        self._bm25 = None
-        logger.info("BM25 index invalidated — will rebuild on next query")
+        self._bm25   = None
+
+        if self._cache_path.exists():
+            try:
+                self._cache_path.unlink()
+                logger.info("BM25 disk cache deleted — will rebuild on next query")
+            except Exception as exc:
+                logger.warning("Could not delete BM25 cache file: %s", exc)
+        else:
+            logger.info("BM25 index invalidated — will rebuild on next query")
 
     def retrieve(self, query: str, top_k: int = 50) -> list[dict[str, Any]]:
         """Return top_k chunks ranked by BM25 score for the query."""
