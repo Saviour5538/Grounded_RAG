@@ -44,8 +44,14 @@ class ConfidenceScorer:
         self,
         query: str,
         chunks: list[dict[str, Any]],
+        threshold: float | None = None,
     ) -> dict[str, Any]:
-        """Return a dict with score (float), signals (dict), and abstain (bool)."""
+        """Return a dict with score (float), signals (dict), and abstain (bool).
+
+        threshold: per-request override. If None, falls back to self.threshold
+                   (set from CONFIDENCE_THRESHOLD env var / slider default).
+        """
+        effective_threshold = threshold if threshold is not None else self.threshold
         if not chunks:
             return {"score": 0.0, "signals": {}, "abstain": True}
 
@@ -77,5 +83,5 @@ class ConfidenceScorer:
                 "rrf_signal":     round(rrf_signal, 4),
                 "token_overlap":  round(overlap_signal, 4),
             },
-            "abstain": score < self.threshold,
+            "abstain": score < effective_threshold,
         }

@@ -567,6 +567,42 @@
     ::-webkit-scrollbar-track { background: var(--surface); }
     ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
     ::-webkit-scrollbar-thumb:hover { background: var(--text3); }
+
+    /* ── Confidence slider ── */
+    .slider-row {
+      display: flex; align-items: center; gap: 10px;
+      margin-top: 8px; font-size: 12px; color: var(--text2);
+    }
+    .slider-row label { white-space: nowrap; }
+    .slider-row input[type=range] {
+      flex: 1; accent-color: var(--accent); cursor: pointer;
+    }
+    .slider-val { color: var(--accent); font-weight: 600; font-family: 'JetBrains Mono', monospace; }
+
+    /* ── Corpus browser ── */
+    .corpus-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 5px 8px; border-radius: 4px; margin-bottom: 3px;
+      background: var(--surface2);
+    }
+    .corpus-src {
+      color: var(--text); font-size: 11px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 210px;
+    }
+    .corpus-cnt {
+      color: var(--accent2); font-size: 10px;
+      font-family: 'JetBrains Mono', monospace; white-space: nowrap; margin-left: 8px;
+    }
+    .btn-corpus-refresh {
+      background: none; border: 1px solid var(--border); border-radius: 4px;
+      color: var(--text2); cursor: pointer; font-size: 13px; padding: 2px 8px;
+      transition: background 0.15s, color 0.15s;
+    }
+    .btn-corpus-refresh:hover { background: var(--surface2); color: var(--text); }
+    .corpus-summary {
+      font-size: 12px; color: var(--text2); margin-bottom: 10px;
+    }
+    .corpus-summary b { color: var(--text); }
   </style>
 </head>
 <body>
@@ -677,6 +713,25 @@
           <span style="color:var(--green)">✦</span>
           <span style="color:var(--text2)"><b style="color:var(--text)">LRU Cache</b> — Instant repeat answers</span>
         </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span style="color:var(--green)">✦</span>
+          <span style="color:var(--text2)"><b style="color:var(--text)">Parallel Retrieval</b> — Dense + BM25 concurrently</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span style="color:var(--green)">✦</span>
+          <span style="color:var(--text2)"><b style="color:var(--text)">HyDE</b> — Hypothetical doc expansion (toggle in .env)</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Corpus Browser -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">Corpus Browser</div>
+        <button class="btn-corpus-refresh" id="corpus-refresh-btn" title="Load corpus stats">↺ Refresh</button>
+      </div>
+      <div id="corpus-body" style="font-size:12px;color:var(--text3);padding:4px 0">
+        Click ↺ Refresh to inspect indexed sources.
       </div>
     </div>
   </div>
@@ -708,6 +763,11 @@
                placeholder="e.g. Does high cardiopulmonary fitness increase mortality?"
                autocomplete="off" />
         <button class="btn-ask" id="query-btn">Ask</button>
+      </div>
+      <div class="slider-row">
+        <label for="threshold-slider">Abstention threshold: <span class="slider-val" id="threshold-val">0.30</span></label>
+        <input type="range" id="threshold-slider" min="0" max="1" step="0.05" value="0.30" />
+        <span style="font-size:10px;color:var(--text3)" title="Lower = answer more, higher = abstain more">↑ strict</span>
       </div>
 
       <!-- Empty state -->
@@ -955,6 +1015,46 @@ function renderThread() {
 updateSessionPill(getSessionId());
 document.getElementById('new-convo-btn').addEventListener('click', newSession);
 
+// ── Confidence threshold slider ───────────────────────────────────────────────
+const threshSlider = document.getElementById('threshold-slider');
+const threshVal    = document.getElementById('threshold-val');
+threshSlider.addEventListener('input', () => {
+  threshVal.textContent = parseFloat(threshSlider.value).toFixed(2);
+});
+
+// ── Corpus browser ────────────────────────────────────────────────────────────
+async function loadCorpus() {
+  const body = document.getElementById('corpus-body');
+  body.innerHTML = '<span style="color:var(--text3)">Loading…</span>';
+  try {
+    const d = await fetch('/corpus').then(r => r.json());
+    if (d.error && !d.total_chunks) {
+      body.innerHTML = `<span style="color:var(--red)">Error: ${escHtml(d.error)}</span>`;
+      return;
+    }
+    let html = `<div class="corpus-summary">
+      <b>${(d.total_chunks || 0).toLocaleString()}</b> chunks &nbsp;·&nbsp;
+      <b>${d.unique_sources || 0}</b> source${d.unique_sources !== 1 ? 's' : ''}`;
+    if (d.bm25_built) html += ` &nbsp;<span style="color:var(--green)">· BM25 ready</span>`;
+    else html += ` &nbsp;<span style="color:var(--text3)">· BM25 not built yet (run a query first)</span>`;
+    html += `</div>`;
+    if (d.sources && d.sources.length) {
+      html += d.sources.map(s =>
+        `<div class="corpus-row">
+          <span class="corpus-src" title="${escHtml(s.name)}">${escHtml(s.name)}</span>
+          <span class="corpus-cnt">${s.chunks.toLocaleString()} chunks</span>
+        </div>`
+      ).join('');
+    } else {
+      html += '<div style="color:var(--text3);font-size:12px">No sources indexed yet — upload a file first.</div>';
+    }
+    body.innerHTML = html;
+  } catch (e) {
+    body.innerHTML = `<span style="color:var(--red)">Error: ${escHtml(e.message)}</span>`;
+  }
+}
+document.getElementById('corpus-refresh-btn').addEventListener('click', loadCorpus);
+
 // ── Query ─────────────────────────────────────────────────────────────────────
 const queryBtn = document.getElementById('query-btn');
 const qInput   = document.getElementById('question-input');
@@ -1002,7 +1102,11 @@ async function runQuery() {
     const r = await fetch('/query/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question: q, session_id: getSessionId() }),
+      body: JSON.stringify({
+        question: q,
+        session_id: getSessionId(),
+        confidence_threshold: parseFloat(threshSlider.value),
+      }),
     });
     if (!r.ok) {
       const e = await r.json();

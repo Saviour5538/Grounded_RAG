@@ -57,6 +57,11 @@ class Settings(BaseSettings):
     # ── Confidence / Abstention ───────────────────────────────────────────────
     confidence_threshold: float = 0.3
 
+    # ── HyDE query expansion ─────────────────────────────────────────────────
+    # When enabled: generate a hypothetical answer, embed it, use it for dense
+    # retrieval. Usually improves recall on complex questions; adds one LLM call.
+    hyde_enabled: bool = False
+
     # ── Agentic re-retrieval (Phase 8) ───────────────────────────────────────
     agentic_retry_enabled: bool = True
     agentic_max_retries: int = 2        # reformulation attempts before final abstention

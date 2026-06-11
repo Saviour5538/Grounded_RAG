@@ -83,6 +83,7 @@ class QueryRequest(BaseModel):
     question: str
     top_k: int | None = None
     session_id: str | None = None   # omit for stateless; provide to use session memory
+    confidence_threshold: float | None = None  # overrides global CONFIDENCE_THRESHOLD for this request
 
 
 class QueryResponse(BaseModel):
@@ -297,7 +298,11 @@ async def query(request: QueryRequest):
     if session_id:
         history = list(_sessions.get(session_id, []))   # copy so pipeline can't mutate store
 
-    result = _pipeline.query(request.question, history=history or None)
+    result = _pipeline.query(
+        request.question,
+        history=history or None,
+        confidence_threshold=request.confidence_threshold,
+    )
 
     # Persist this turn into session memory
     if session_id:
@@ -335,7 +340,11 @@ async def query_stream(request: QueryRequest):
 
     def _run_sync() -> None:
         try:
-            for chunk in _pipeline.query_stream(request.question, history=history or None):
+            for chunk in _pipeline.query_stream(
+                request.question,
+                history=history or None,
+                confidence_threshold=request.confidence_threshold,
+            ):
                 q.put(chunk)
         except Exception as exc:
             q.put(f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n")
@@ -378,6 +387,16 @@ async def query_stream(request: QueryRequest):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.get("/corpus")
+async def corpus_stats():
+    """Return stats about the indexed corpus: total chunks, unique sources, and a
+    per-source breakdown. Sources come from the BM25 corpus if already built;
+    otherwise only the total Pinecone chunk count is returned."""
+    if _pipeline is None:
+        raise HTTPException(status_code=503, detail="Pipeline not initialised")
+    return _pipeline.retriever.corpus_stats()
 
 
 @app.delete("/session/{session_id}", include_in_schema=False)

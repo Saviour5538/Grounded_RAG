@@ -8,6 +8,7 @@ in both lists are boosted, which is the key advantage over single-mode retrieval
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from typing import Any as _Any
@@ -34,10 +35,20 @@ class HybridRetriever:
         top_k: int = 10,
         dense_k: int = 50,
         sparse_k: int = 50,
+        dense_query: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Return top_k chunks, fused from dense + BM25 results via RRF."""
-        dense_hits  = self.dense.retrieve(query, top_k=dense_k)
-        sparse_hits = self.sparse.retrieve(query, top_k=sparse_k)
+        """Return top_k chunks, fused from dense + BM25 results via RRF.
+
+        dense_query: optional alternative text for the dense retriever (used by HyDE —
+                     a hypothetical answer that embeds closer to relevant docs than
+                     the raw keyword query). BM25 always uses the original query.
+        """
+        _dense_q = dense_query or query
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            fut_dense  = pool.submit(self.dense.retrieve,  _dense_q, top_k=dense_k)
+            fut_sparse = pool.submit(self.sparse.retrieve, query,    top_k=sparse_k)
+            dense_hits  = fut_dense.result()
+            sparse_hits = fut_sparse.result()
         logger.debug(
             "RRF input — dense: %d hits, sparse: %d hits", len(dense_hits), len(sparse_hits)
         )
@@ -70,6 +81,28 @@ class HybridRetriever:
             chunk["score"] = round(score, 6)
             results.append(chunk)
         return results
+
+    def corpus_stats(self) -> dict[str, Any]:
+        """Return stats about the indexed corpus for the browser UI."""
+        try:
+            total = self.dense.collection_size()
+            sources: dict[str, int] = {}
+            if self.sparse._corpus:
+                for chunk in self.sparse._corpus:
+                    src = chunk.get("source", "unknown") or "unknown"
+                    sources[src] = sources.get(src, 0) + 1
+            return {
+                "total_chunks":   total,
+                "unique_sources": len(sources),
+                "bm25_built":     self.sparse._bm25 is not None,
+                "sources": [
+                    {"name": k, "chunks": v}
+                    for k, v in sorted(sources.items(), key=lambda x: -x[1])
+                ],
+            }
+        except Exception as exc:
+            logger.warning("corpus_stats failed: %s", exc)
+            return {"total_chunks": 0, "unique_sources": 0, "bm25_built": False, "sources": [], "error": str(exc)}
 
     # ── Delegate index-management methods to the dense retriever ─────────────
     def index_chunks(self, chunks: list, batch_size: int = 128) -> int:

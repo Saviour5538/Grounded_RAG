@@ -34,6 +34,7 @@ from grounded_rag.generation.generator import Generator
 from grounded_rag.observability.tracer import Tracer
 from grounded_rag.retrieval.dense import DenseRetriever, EmbeddingModel
 from grounded_rag.retrieval.hybrid import HybridRetriever
+from grounded_rag.retrieval.hyde import HyDEExpander
 from grounded_rag.retrieval.reformulator import QueryReformulator
 from grounded_rag.retrieval.reranker import GeminiReranker
 from grounded_rag.retrieval.sparse import BM25Retriever
@@ -127,6 +128,12 @@ class RAGPipeline:
         )
         self._max_retries = cfg.agentic_max_retries if cfg.agentic_retry_enabled else 0
 
+        # ── HyDE query expansion ──────────────────────────────────────────────
+        self.hyde = (
+            HyDEExpander(api_key=cfg.gemini_api_key, model=cfg.llm_model)
+            if cfg.hyde_enabled else None
+        )
+
         self._gemini_api_key = cfg.gemini_api_key
         self._llm_model = cfg.llm_model
         self._retrieve_k = max(cfg.retrieval_top_k, cfg.reranker_top_n * 4)
@@ -135,6 +142,7 @@ class RAGPipeline:
         self,
         question: str,
         history: list[dict[str, Any]] | None = None,
+        confidence_threshold: float | None = None,
     ) -> dict[str, Any]:
         """Run the full pipeline: cache → retrieve → rerank → confidence → generate → verify.
 
@@ -143,6 +151,8 @@ class RAGPipeline:
                  resolve references like "it" or "they" from prior context.
                  Cache is bypassed when history is present (session-specific answers
                  must not be served to other sessions).
+        confidence_threshold: per-request override for the abstention threshold.
+                 If None, uses the global setting from CONFIDENCE_THRESHOLD env var.
         """
         t0 = time.perf_counter()
 
@@ -168,13 +178,18 @@ class RAGPipeline:
         confidence: dict[str, Any] = {"score": 0.0, "signals": {}, "abstain": True}
 
         for attempt in range(self._max_retries + 1):
-            candidates = self.retriever.retrieve(active_query, top_k=self._retrieve_k)
+            dense_query = self.hyde.expand(active_query) if self.hyde else None
+            candidates = self.retriever.retrieve(
+                active_query, top_k=self._retrieve_k, dense_query=dense_query
+            )
 
             if not candidates:
                 break
 
             chunks = self.reranker.rerank(active_query, candidates)
-            confidence = self.confidence_scorer.compute(active_query, chunks)
+            confidence = self.confidence_scorer.compute(
+                active_query, chunks, threshold=confidence_threshold
+            )
 
             if not confidence["abstain"]:
                 break  # evidence is strong enough — proceed to generation
@@ -260,6 +275,7 @@ class RAGPipeline:
         self,
         question: str,
         history: list[dict[str, Any]] | None = None,
+        confidence_threshold: float | None = None,
     ) -> Iterator[str]:
         """Synchronous generator that yields SSE-formatted strings.
 
@@ -311,11 +327,16 @@ class RAGPipeline:
 
         try:
             for attempt in range(self._max_retries + 1):
-                candidates = self.retriever.retrieve(active_query, top_k=self._retrieve_k)
+                dense_query = self.hyde.expand(active_query) if self.hyde else None
+                candidates = self.retriever.retrieve(
+                    active_query, top_k=self._retrieve_k, dense_query=dense_query
+                )
                 if not candidates:
                     break
                 chunks     = self.reranker.rerank(active_query, candidates)
-                confidence = self.confidence_scorer.compute(active_query, chunks)
+                confidence = self.confidence_scorer.compute(
+                    active_query, chunks, threshold=confidence_threshold
+                )
                 if not confidence["abstain"]:
                     break
                 if self.reformulator and attempt < self._max_retries:
