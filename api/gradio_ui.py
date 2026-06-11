@@ -339,13 +339,34 @@ def build_demo(
 
     # ── upload ────────────────────────────────────────────────────────────────
 
-    def do_upload(file: str | None, clear_existing: bool) -> Generator:
-        """file is a filepath string (Gradio 6 gr.File default type='filepath')."""
-        if not file:
+    def do_upload(file, clear_existing: bool):
+        """Gradio 6 gr.File (type='filepath') returns a string path.
+        Handle both string and dict formats defensively."""
+        if file is None:
             yield "⚠️ Please select a file first."
             return
 
-        filepath   = Path(file)
+        # Resolve the filepath regardless of what Gradio passes
+        try:
+            if isinstance(file, str):
+                filepath = Path(file)
+            elif isinstance(file, dict):
+                filepath = Path(file.get("path") or file.get("name") or "")
+            elif hasattr(file, "path"):
+                filepath = Path(file.path)
+            elif hasattr(file, "name"):
+                filepath = Path(file.name)
+            else:
+                yield f"❌ Unexpected file value type: `{type(file).__name__}` — please report this."
+                return
+        except Exception as exc:
+            yield f"❌ Could not resolve file path: {exc}"
+            return
+
+        if not filepath.exists():
+            yield f"❌ File not found at `{filepath}` — try re-uploading."
+            return
+
         filename   = filepath.name
         try:
             file_bytes = filepath.read_bytes()
@@ -577,11 +598,13 @@ def build_demo(
                     _submit,
                     inputs=[msg_box, chatbot, threshold_slider],
                     outputs=[chatbot, metrics_out, cite_out, src_out],
+                    concurrency_limit=None,
                 )
                 msg_box.submit(
                     _submit,
                     inputs=[msg_box, chatbot, threshold_slider],
                     outputs=[chatbot, metrics_out, cite_out, src_out],
+                    concurrency_limit=None,
                 )
                 send_btn.click(lambda: "", outputs=[msg_box])
                 msg_box.submit(lambda: "", outputs=[msg_box])
@@ -633,6 +656,8 @@ def build_demo(
                     do_upload,
                     inputs=[file_in, clear_cb],
                     outputs=[upload_status],
+                    concurrency_limit=None,
+                    show_progress="hidden",
                 )
 
             # ── Corpus ──────────────────────────────────────────────────────
@@ -650,8 +675,14 @@ def build_demo(
                 with gr.Row():
                     corpus_btn = gr.Button("↺  Refresh stats", variant="secondary", size="sm")
                 corpus_md = gr.Markdown("*Click Refresh to load corpus stats.*")
-                corpus_btn.click(load_corpus, outputs=[corpus_md])
+                corpus_btn.click(
+                    load_corpus, outputs=[corpus_md], concurrency_limit=None,
+                )
 
-        demo.load(get_health_html, outputs=[health_out])
+        demo.load(get_health_html, outputs=[health_out], concurrency_limit=None)
+
+        # Allow unlimited concurrent events — without this, Gradio's default
+        # concurrency_limit=1 causes all button clicks to queue behind each other.
+        demo.queue(default_concurrency_limit=None)
 
     return demo
